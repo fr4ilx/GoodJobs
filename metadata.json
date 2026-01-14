@@ -1,0 +1,8 @@
+{
+  "name": "GoodJobs Dashboard",
+  "description": "A high-fidelity job matching platform that uses AI to analyze resumes against job descriptions, providing a personalized matching score for every application.",
+  "requestFramePermissions": [
+    "camera",
+    "microphone"
+  ]
+}
