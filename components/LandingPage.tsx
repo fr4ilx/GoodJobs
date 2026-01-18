@@ -2,7 +2,7 @@
 import React from 'react';
 
 interface LandingPageProps {
-  onStart: () => void;
+  onStart: (mode: 'login' | 'signup') => void;
 }
 
 const LandingPage: React.FC<LandingPageProps> = ({ onStart }) => {
@@ -18,15 +18,22 @@ const LandingPage: React.FC<LandingPageProps> = ({ onStart }) => {
           </div>
           <span className="font-black text-xl text-slate-900 tracking-tight">GoodJobs</span>
         </div>
-        <div className="flex items-center gap-8">
+        <div className="flex items-center gap-4 md:gap-8">
           <a href="#" className="hidden md:block text-sm font-bold text-slate-400 hover:text-indigo-600 transition-colors">Features</a>
-          <a href="#" className="hidden md:block text-sm font-bold text-slate-400 hover:text-indigo-600 transition-colors">Pricing</a>
-          <button 
-            onClick={onStart}
-            className="bg-slate-900 text-white px-6 py-2.5 rounded-xl text-sm font-bold hover:bg-indigo-600 transition-all shadow-xl shadow-slate-200"
-          >
-            Launch App
-          </button>
+          <div className="flex items-center gap-3">
+            <button 
+              onClick={() => onStart('login')}
+              className="text-sm font-bold text-slate-600 hover:text-indigo-600 px-4 py-2.5 transition-colors"
+            >
+              Sign In
+            </button>
+            <button 
+              onClick={() => onStart('signup')}
+              className="bg-slate-900 text-white px-6 py-2.5 rounded-xl text-sm font-bold hover:bg-indigo-600 transition-all shadow-xl shadow-slate-200"
+            >
+              Join Now!
+            </button>
+          </div>
         </div>
       </nav>
 
@@ -52,15 +59,18 @@ const LandingPage: React.FC<LandingPageProps> = ({ onStart }) => {
           </p>
           <div className="flex flex-col sm:flex-row items-center justify-center gap-4 animate-in fade-in slide-in-from-bottom-10 duration-1000 delay-300">
             <button 
-              onClick={onStart}
+              onClick={() => onStart('signup')}
               className="w-full sm:w-auto bg-indigo-600 text-white px-10 py-5 rounded-2xl font-black text-lg shadow-2xl shadow-indigo-200 hover:bg-indigo-700 hover:scale-105 active:scale-95 transition-all flex items-center justify-center gap-3"
             >
-              Start Matching Now
+              Join Now!
               <i className="fa-solid fa-arrow-right"></i>
             </button>
-            <button className="w-full sm:w-auto bg-white border border-slate-200 text-slate-900 px-10 py-5 rounded-2xl font-black text-lg hover:border-indigo-200 transition-all flex items-center justify-center gap-3">
-              Watch Demo
-              <i className="fa-solid fa-play text-xs"></i>
+            <button 
+              onClick={() => onStart('login')}
+              className="w-full sm:w-auto bg-white border border-slate-200 text-slate-900 px-10 py-5 rounded-2xl font-black text-lg hover:border-indigo-200 transition-all flex items-center justify-center gap-3"
+            >
+              Sign In
+              <i className="fa-solid fa-user-check text-xs"></i>
             </button>
           </div>
         </div>
