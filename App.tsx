@@ -1,25 +1,31 @@
 
 import React, { useState, useEffect, useCallback, useMemo } from 'react';
 import { Job, NavItem, UserProfile, UserPreferences } from './types';
-import { MOCK_JOBS } from './constants.tsx';
+import { MOCK_JOBS } from './constants';
 import Sidebar from './components/Sidebar';
 import JobCard from './components/JobCard';
 import LandingPage from './components/LandingPage';
-import AuthPage from './components/AuthPage';
+import SignInPage from './components/SignInPage';
+import SignUpPage from './components/SignUpPage';
 import PreferencesPage from './components/PreferencesPage';
 import ResumeUploadPage from './components/ResumeUploadPage';
 import JobDetailModal from './components/JobDetailModal';
+import PreferencesModal from './components/PreferencesModal';
 import { calculateMatchScore } from './services/geminiService';
+import { useAuth } from './contexts/AuthContext';
+import { logOut } from './services/authService';
+import { saveUserPreferences, saveResumeData, saveUserProfile, getUserProfile } from './services/firestoreService';
 
 const App: React.FC = () => {
+  const { currentUser } = useAuth();
   const [isStarted, setIsStarted] = useState(false);
   const [authMode, setAuthMode] = useState<'login' | 'signup'>('login');
-  const [isAuthenticated, setIsAuthenticated] = useState(false);
   const [isPreferencesComplete, setIsPreferencesComplete] = useState(false);
   const [isResumeComplete, setIsResumeComplete] = useState(false);
   
   const [activeNav, setActiveNav] = useState<NavItem>(NavItem.Jobs);
   const [selectedJob, setSelectedJob] = useState<Job | null>(null);
+  const [showPreferencesModal, setShowPreferencesModal] = useState(false);
   const [usePreferencesFilter] = useState(true); 
   
   const [jobs, setJobs] = useState<Job[]>(MOCK_JOBS);
@@ -30,41 +36,117 @@ const App: React.FC = () => {
     resumeContent: '' 
   });
 
+  // Update user profile when Firebase user changes
+  useEffect(() => {
+    if (currentUser) {
+      const name = currentUser.displayName || currentUser.email?.split('@')[0] || 'User';
+      const email = currentUser.email || '';
+      
+      setUserProfile(prev => ({
+        ...prev,
+        name,
+        email
+      }));
+
+      // Load user's onboarding state from Firestore
+      getUserProfile(currentUser.uid).then(userData => {
+        if (userData) {
+          // User exists, check if they completed onboarding
+          if (userData.preferences) {
+            setIsPreferencesComplete(true);
+          }
+          if (userData.resumeContent || userData.resumeFileURLs?.length) {
+            setIsResumeComplete(true);
+          }
+          // Load their data
+          if (userData.preferences) {
+            setUserProfile(prev => ({ ...prev, preferences: userData.preferences }));
+          }
+        } else {
+          // New user - save basic info and start onboarding
+          saveUserProfile(currentUser.uid, { name, email }).catch(console.error);
+        }
+      }).catch(console.error);
+    } else {
+      // User logged out - reset onboarding state
+      setIsPreferencesComplete(false);
+      setIsResumeComplete(false);
+    }
+  }, [currentUser]);
+
   const handleStart = (mode: 'login' | 'signup') => {
     setAuthMode(mode);
     setIsStarted(true);
   };
 
-  const handleLogin = (email: string, name: string, isNewUser: boolean) => {
-    setUserProfile(prev => ({ ...prev, email, name }));
-    setIsAuthenticated(true);
-    setIsPreferencesComplete(!isNewUser);
-    setIsResumeComplete(!isNewUser);
+  const handlePreferencesComplete = async (prefs: UserPreferences) => {
+    setUserProfile(prev => ({ ...prev, preferences: prefs }));
     
-    if (!isNewUser) {
-      setUserProfile(prev => ({
-        ...prev,
-        resumeContent: 'Experienced Software Engineer with 5 years in React, TypeScript, and Node.js.'
-      }));
+    // Save preferences to Firestore
+    if (currentUser) {
+      try {
+        await saveUserPreferences(currentUser.uid, prefs);
+        setIsPreferencesComplete(true);
+      } catch (error) {
+        console.error('Error saving preferences:', error);
+        alert('Failed to save preferences. Please try again.');
+      }
+    } else {
+      setIsPreferencesComplete(true);
     }
   };
 
-  const handlePreferencesComplete = (prefs: UserPreferences) => {
-    setUserProfile(prev => ({ ...prev, preferences: prefs }));
-    setIsPreferencesComplete(true);
+  const handleResumeComplete = async (data: {
+    resumeContent: string;
+    resumeFiles: File[];
+    projectFiles: File[];
+    projectLinks: string[];
+  }) => {
+    setUserProfile(prev => ({ 
+      ...prev, 
+      resumeContent: data.resumeContent,
+      resumeFiles: data.resumeFiles,
+      projectFiles: data.projectFiles,
+      projectLinks: data.projectLinks
+    }));
+    
+    // Save resume data to Firestore
+    if (currentUser) {
+      try {
+        await saveResumeData(currentUser.uid, data);
+        setIsResumeComplete(true);
+      } catch (error) {
+        console.error('Error saving resume data:', error);
+        alert('Failed to save resume data. Please try again.');
+      }
+    } else {
+      setIsResumeComplete(true);
+    }
   };
 
-  const handleResumeComplete = (resumeContent: string) => {
-    setUserProfile(prev => ({ ...prev, resumeContent }));
-    setIsResumeComplete(true);
+  const handleSignOut = async () => {
+    try {
+      await logOut();
+      setIsStarted(false);
+      setIsPreferencesComplete(false);
+      setIsResumeComplete(false);
+      setActiveNav(NavItem.Jobs);
+    } catch (error) {
+      console.error('Error signing out:', error);
+    }
   };
 
-  const handleSignOut = () => {
-    setIsAuthenticated(false);
-    setIsStarted(false);
-    setIsPreferencesComplete(false);
-    setIsResumeComplete(false);
-    setActiveNav(NavItem.Jobs);
+  const handleUpdatePreferences = async (newPrefs: UserPreferences) => {
+    if (currentUser) {
+      try {
+        await saveUserPreferences(currentUser.uid, newPrefs);
+        setUserProfile(prev => ({ ...prev, preferences: newPrefs }));
+        setShowPreferencesModal(false);
+      } catch (error) {
+        console.error('Error updating preferences:', error);
+        alert('Failed to update preferences. Please try again.');
+      }
+    }
   };
 
   const runAnalysis = useCallback(async () => {
@@ -96,26 +178,37 @@ const App: React.FC = () => {
   }, [jobs, userProfile.resumeContent]);
 
   useEffect(() => {
-    if (isAuthenticated && isPreferencesComplete && isResumeComplete) {
+    if (currentUser && isPreferencesComplete && isResumeComplete) {
       runAnalysis();
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [isAuthenticated, isPreferencesComplete, isResumeComplete]);
+  }, [currentUser, isPreferencesComplete, isResumeComplete]);
 
   const filteredJobs = useMemo(() => {
     let result = [...jobs];
 
     if (usePreferencesFilter && userProfile.preferences) {
       const prefs = userProfile.preferences;
+      const jobTitles = Array.isArray(prefs.jobTitle) ? prefs.jobTitle : [prefs.jobTitle].filter(Boolean);
+      const locations = Array.isArray(prefs.location) ? prefs.location : [prefs.location].filter(Boolean);
+      
       result = result.filter(j => {
-        const matchesTitle = j.title.toLowerCase().includes(prefs.jobTitle.toLowerCase()) || 
-                             j.category.toLowerCase().includes(prefs.jobTitle.toLowerCase());
-        const matchesLocation = prefs.location.toLowerCase() === 'remote' 
-          ? j.location.toLowerCase() === 'remote' 
-          : j.location.toLowerCase().includes(prefs.location.toLowerCase());
+        const matchesTitle = jobTitles.length === 0 || jobTitles.some(title => 
+          j.title.toLowerCase().includes(title.toLowerCase()) || 
+          j.category.toLowerCase().includes(title.toLowerCase())
+        );
+        
+        const matchesLocation = locations.length === 0 || locations.some(location => 
+          location.toLowerCase() === 'remote' 
+            ? j.location.toLowerCase() === 'remote' 
+            : location.toLowerCase() === 'anywhere in us'
+            ? true
+            : j.location.toLowerCase().includes(location.toLowerCase())
+        );
+        
         const matchesWorkType = prefs.workType === 'All' || j.type === prefs.workType;
         
-        return matchesTitle || matchesLocation || matchesWorkType;
+        return matchesTitle && matchesLocation && matchesWorkType;
       });
     }
 
@@ -124,14 +217,64 @@ const App: React.FC = () => {
 
   const isMatching = analysisProgress !== null;
 
+  // Landing page - show when not started
   if (!isStarted) return <LandingPage onStart={handleStart} />;
-  if (!isAuthenticated) return <AuthPage onLogin={handleLogin} onBack={() => setIsStarted(false)} initialMode={authMode} />;
-  if (!isPreferencesComplete) return <PreferencesPage onComplete={handlePreferencesComplete} />;
-  if (!isResumeComplete) return <ResumeUploadPage onComplete={handleResumeComplete} onBack={() => setIsPreferencesComplete(false)} />;
+  
+  // Auth pages - show when started but not authenticated
+  if (!currentUser) {
+    if (authMode === 'signup') {
+      return (
+        <SignUpPage 
+          onBack={() => setIsStarted(false)} 
+          onSwitchToSignIn={() => setAuthMode('login')}
+        />
+      );
+    }
+    return (
+      <SignInPage 
+        onBack={() => setIsStarted(false)} 
+        onSwitchToSignUp={() => setAuthMode('signup')}
+      />
+    );
+  }
+  
+  // Handler to go back to sign in (signs out current user)
+  const handleBackToSignIn = async () => {
+    await logOut();
+    setAuthMode('login');
+    setIsStarted(true);
+  };
+
+  // Handler to go back from Step 1 (signs out and returns to landing)
+  const handleBackFromPreferences = async () => {
+    await logOut();
+    setIsStarted(false);
+  };
+
+  // Onboarding steps - show after authentication
+  if (!isPreferencesComplete) {
+    return (
+      <PreferencesPage 
+        onComplete={handlePreferencesComplete}
+        onBack={handleBackFromPreferences}
+        onSignIn={handleBackToSignIn}
+      />
+    );
+  }
+  
+  if (!isResumeComplete) {
+    return (
+      <ResumeUploadPage 
+        onComplete={handleResumeComplete} 
+        onBack={() => setIsPreferencesComplete(false)}
+        onSignIn={handleBackToSignIn}
+      />
+    );
+  }
 
   return (
     <div className="min-h-screen bg-[#f8f9fe] animate-in fade-in duration-1000">
-      <Sidebar activeItem={activeNav} onNavigate={setActiveNav} />
+      <Sidebar activeItem={activeNav} onNavigate={setActiveNav} onSignOut={handleSignOut} />
 
       <main className="ml-64 p-12 max-w-7xl mx-auto">
         {activeNav === NavItem.Jobs && (
@@ -155,28 +298,51 @@ const App: React.FC = () => {
               </div>
 
               {/* Preferences Summary */}
-              {userProfile.preferences && (
-                <div className="flex flex-wrap items-center gap-3 animate-in fade-in slide-in-from-left-4 duration-700">
-                  <div className="flex items-center gap-2 bg-white px-4 py-2.5 rounded-2xl text-xs font-bold border border-slate-100 shadow-sm text-slate-600">
-                    <i className="fa-solid fa-briefcase text-indigo-500"></i>
-                    {userProfile.preferences.jobTitle}
-                  </div>
-                  <div className="flex items-center gap-2 bg-white px-4 py-2.5 rounded-2xl text-xs font-bold border border-slate-100 shadow-sm text-slate-600">
-                    <i className="fa-solid fa-location-dot text-purple-500"></i>
-                    {userProfile.preferences.location}
-                  </div>
-                  <div className="flex items-center gap-2 bg-white px-4 py-2.5 rounded-2xl text-xs font-bold border border-slate-100 shadow-sm text-slate-600">
-                    <i className="fa-solid fa-house-laptop text-emerald-500"></i>
-                    {userProfile.preferences.workType}
-                  </div>
-                  {userProfile.preferences.requiresSponsorship && (
-                    <div className="flex items-center gap-2 bg-rose-50 text-rose-600 px-4 py-2.5 rounded-2xl text-xs font-bold border border-rose-100/50 shadow-sm">
-                      <i className="fa-solid fa-passport opacity-70"></i>
-                      Visa Support Required
+              {userProfile.preferences && (() => {
+                const jobTitles = Array.isArray(userProfile.preferences.jobTitle) 
+                  ? userProfile.preferences.jobTitle 
+                  : [userProfile.preferences.jobTitle].filter(Boolean);
+                const locations = Array.isArray(userProfile.preferences.location) 
+                  ? userProfile.preferences.location 
+                  : [userProfile.preferences.location].filter(Boolean);
+                
+                return (
+                  <div className="flex flex-wrap items-center gap-3 animate-in fade-in slide-in-from-left-4 duration-700">
+                    {jobTitles.map((title, idx) => (
+                      <div key={idx} className="flex items-center gap-2 bg-white px-4 py-2.5 rounded-2xl text-xs font-bold border border-slate-100 shadow-sm text-slate-600">
+                        <i className="fa-solid fa-briefcase text-indigo-500"></i>
+                        {title}
+                      </div>
+                    ))}
+                    {locations.map((location, idx) => (
+                      <div key={idx} className="flex items-center gap-2 bg-white px-4 py-2.5 rounded-2xl text-xs font-bold border border-slate-100 shadow-sm text-slate-600">
+                        <i className="fa-solid fa-location-dot text-purple-500"></i>
+                        {location}
+                      </div>
+                    ))}
+                    <div className="flex items-center gap-2 bg-white px-4 py-2.5 rounded-2xl text-xs font-bold border border-slate-100 shadow-sm text-slate-600">
+                      <i className="fa-solid fa-house-laptop text-emerald-500"></i>
+                      {userProfile.preferences.workType}
                     </div>
-                  )}
-                </div>
-              )}
+                    <div className="flex items-center gap-2 bg-white px-4 py-2.5 rounded-2xl text-xs font-bold border border-slate-100 shadow-sm text-slate-600">
+                      <i className="fa-solid fa-calendar-check text-teal-500"></i>
+                      {userProfile.preferences.yearsOfExperience}
+                    </div>
+                    {userProfile.preferences.desiredSalary && (
+                      <div className="flex items-center gap-2 bg-white px-4 py-2.5 rounded-2xl text-xs font-bold border border-slate-100 shadow-sm text-slate-600">
+                        <i className="fa-solid fa-dollar-sign text-amber-500"></i>
+                        ${parseInt(userProfile.preferences.desiredSalary).toLocaleString()}/yr
+                      </div>
+                    )}
+                    {userProfile.preferences.requiresSponsorship && (
+                      <div className="flex items-center gap-2 bg-rose-50 text-rose-600 px-4 py-2.5 rounded-2xl text-xs font-bold border border-rose-100/50 shadow-sm">
+                        <i className="fa-solid fa-passport opacity-70"></i>
+                        Visa Support Required
+                      </div>
+                    )}
+                  </div>
+                );
+              })()}
             </header>
 
             <div className="relative">
@@ -281,33 +447,71 @@ const App: React.FC = () => {
                 </div>
              </div>
 
-             {userProfile.preferences && (
-               <div className="bg-white rounded-[2.5rem] p-10 shadow-sm border border-slate-100 relative overflow-hidden group">
-                 <div className="flex items-center justify-between mb-8">
-                    <h4 className="text-xl font-black text-slate-900 tracking-tight">Active Matching Preferences</h4>
-                    <button className="text-indigo-600 text-sm font-black uppercase tracking-widest hover:underline">Modify</button>
-                 </div>
+             {userProfile.preferences && (() => {
+               const jobTitles = Array.isArray(userProfile.preferences.jobTitle) 
+                 ? userProfile.preferences.jobTitle 
+                 : [userProfile.preferences.jobTitle].filter(Boolean);
+               const locations = Array.isArray(userProfile.preferences.location) 
+                 ? userProfile.preferences.location 
+                 : [userProfile.preferences.location].filter(Boolean);
+               
+               return (
+                 <div className="bg-white rounded-[2.5rem] p-10 shadow-sm border border-slate-100 relative overflow-hidden group">
+                   <div className="flex items-center justify-between mb-8">
+                      <h4 className="text-xl font-black text-slate-900 tracking-tight">Active Matching Preferences</h4>
+                      <button 
+                        onClick={() => setShowPreferencesModal(true)}
+                        className="text-indigo-600 text-sm font-black uppercase tracking-widest hover:underline"
+                      >
+                        Modify
+                      </button>
+                   </div>
 
-                 <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-                    <div className="p-5 rounded-3xl bg-slate-50 border border-slate-100">
-                       <p className="text-[9px] font-black text-slate-300 uppercase tracking-widest mb-2">Target Role</p>
-                       <p className="font-bold text-slate-900 truncate">{userProfile.preferences.jobTitle}</p>
-                    </div>
-                    <div className="p-5 rounded-3xl bg-slate-50 border border-slate-100">
-                       <p className="text-[9px] font-black text-slate-300 uppercase tracking-widest mb-2">Location Preference</p>
-                       <p className="font-bold text-slate-900 truncate">{userProfile.preferences.location}</p>
-                    </div>
-                    <div className="p-5 rounded-3xl bg-slate-50 border border-slate-100">
-                       <p className="text-[9px] font-black text-slate-300 uppercase tracking-widest mb-2">Work Modality</p>
-                       <p className="font-bold text-slate-900 truncate">{userProfile.preferences.workType}</p>
-                    </div>
-                    <div className="p-5 rounded-3xl bg-slate-50 border border-slate-100">
-                       <p className="text-[9px] font-black text-slate-300 uppercase tracking-widest mb-2">Visa Sponsorship</p>
-                       <p className="font-bold text-slate-900 truncate">{userProfile.preferences.requiresSponsorship ? 'Required' : 'Not Needed'}</p>
-                    </div>
+                   <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                      <div className="p-5 rounded-3xl bg-slate-50 border border-slate-100">
+                         <p className="text-[9px] font-black text-slate-300 uppercase tracking-widest mb-3">Target Roles ({jobTitles.length})</p>
+                         <div className="flex flex-wrap gap-2">
+                           {jobTitles.map((title, idx) => (
+                             <span key={idx} className="text-xs font-bold text-slate-900 bg-white px-3 py-1.5 rounded-lg border border-slate-200">
+                               {title}
+                             </span>
+                           ))}
+                         </div>
+                      </div>
+                      <div className="p-5 rounded-3xl bg-slate-50 border border-slate-100">
+                         <p className="text-[9px] font-black text-slate-300 uppercase tracking-widest mb-3">Location Preferences ({locations.length})</p>
+                         <div className="flex flex-wrap gap-2">
+                           {locations.map((location, idx) => (
+                             <span key={idx} className="text-xs font-bold text-slate-900 bg-white px-3 py-1.5 rounded-lg border border-slate-200">
+                               {location}
+                             </span>
+                           ))}
+                         </div>
+                      </div>
+                      <div className="p-5 rounded-3xl bg-slate-50 border border-slate-100">
+                         <p className="text-[9px] font-black text-slate-300 uppercase tracking-widest mb-2">Work Modality</p>
+                         <p className="font-bold text-slate-900 truncate">{userProfile.preferences.workType}</p>
+                      </div>
+                      <div className="p-5 rounded-3xl bg-slate-50 border border-slate-100">
+                         <p className="text-[9px] font-black text-slate-300 uppercase tracking-widest mb-2">Visa Sponsorship</p>
+                         <p className="font-bold text-slate-900 truncate">{userProfile.preferences.requiresSponsorship ? 'Required' : 'Not Needed'}</p>
+                      </div>
+                      <div className="p-5 rounded-3xl bg-slate-50 border border-slate-100">
+                         <p className="text-[9px] font-black text-slate-300 uppercase tracking-widest mb-2">Years of Experience</p>
+                         <p className="font-bold text-slate-900 truncate">{userProfile.preferences.yearsOfExperience}</p>
+                      </div>
+                      {userProfile.preferences.desiredSalary && (
+                        <div className="p-5 rounded-3xl bg-slate-50 border border-slate-100">
+                           <p className="text-[9px] font-black text-slate-300 uppercase tracking-widest mb-2">Desired Salary</p>
+                           <p className="font-bold text-slate-900 truncate">
+                             ${parseInt(userProfile.preferences.desiredSalary).toLocaleString()} / year
+                           </p>
+                        </div>
+                      )}
+                   </div>
                  </div>
-               </div>
-             )}
+               );
+             })()}
 
              <div className="pt-4 flex gap-4">
                <button 
@@ -325,6 +529,15 @@ const App: React.FC = () => {
       {/* Global Job Detail Overlay */}
       {selectedJob && (
         <JobDetailModal job={selectedJob} onClose={() => setSelectedJob(null)} />
+      )}
+
+      {/* Preferences Edit Modal */}
+      {showPreferencesModal && userProfile.preferences && (
+        <PreferencesModal 
+          currentPreferences={userProfile.preferences}
+          onSave={handleUpdatePreferences}
+          onCancel={() => setShowPreferencesModal(false)}
+        />
       )}
     </div>
   );

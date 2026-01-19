@@ -5,9 +5,10 @@ import { NavItem } from '../types';
 interface SidebarProps {
   activeItem: NavItem;
   onNavigate: (item: NavItem) => void;
+  onSignOut: () => void;
 }
 
-const Sidebar: React.FC<SidebarProps> = ({ activeItem, onNavigate }) => {
+const Sidebar: React.FC<SidebarProps> = ({ activeItem, onNavigate, onSignOut }) => {
   const items = [
     { name: NavItem.Jobs, icon: 'fa-briefcase' },
     { name: NavItem.Resume, icon: 'fa-file-lines' },
@@ -48,14 +49,24 @@ const Sidebar: React.FC<SidebarProps> = ({ activeItem, onNavigate }) => {
         </ul>
       </nav>
 
-      <div className="p-6 mt-auto">
-        <div className="bg-slate-50 rounded-2xl p-4 border border-slate-100">
-          <p className="text-xs font-medium text-slate-500 mb-1">Current Plan</p>
-          <p className="text-sm font-bold text-slate-900">Premium Pro</p>
-          <button className="mt-3 w-full bg-indigo-600 text-white py-2 text-xs font-bold rounded-lg hover:bg-indigo-700 transition-colors">
-            Upgrade Now
+      <div className="p-6 mt-auto space-y-3">
+        <div className="bg-gradient-to-br from-indigo-600 to-purple-600 rounded-[2rem] p-5 text-white shadow-xl">
+          <p className="text-[9px] font-black uppercase tracking-widest opacity-80 mb-1.5">Current Plan</p>
+          <h3 className="text-lg font-black mb-0.5">Premium</h3>
+          <p className="text-[10px] opacity-80 font-medium mb-3">Unlimited AI matching</p>
+          <button className="w-full bg-white/20 hover:bg-white/30 text-white py-2 rounded-xl text-xs font-bold transition-all backdrop-blur-sm">
+            Manage Plan
           </button>
         </div>
+        
+        {/* Sign Out Button */}
+        <button 
+          onClick={onSignOut}
+          className="w-full bg-rose-50 text-rose-600 py-3 rounded-[1.5rem] font-bold text-sm hover:bg-rose-100 active:scale-95 transition-all flex items-center justify-center gap-2 border-2 border-rose-100 shadow-sm"
+        >
+          <i className="fa-solid fa-arrow-right-from-bracket"></i>
+          Sign Out
+        </button>
       </div>
     </aside>
   );

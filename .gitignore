@@ -1,3 +1,22 @@
+# Dependencies
+node_modules
+package-lock.json
+
+# Build output
+dist
+dist-ssr
+*.local
+
+# Environment variables (IMPORTANT: Contains API keys)
+.env
+.env.local
+.env.*.local
+.env.development.local
+.env.test.local
+.env.production.local
+
+config/firebase.ts
+
 # Logs
 logs
 *.log
@@ -6,11 +25,6 @@ yarn-debug.log*
 yarn-error.log*
 pnpm-debug.log*
 lerna-debug.log*
-
-node_modules
-dist
-dist-ssr
-*.local
 
 # Editor directories and files
 .vscode/*
@@ -22,3 +36,22 @@ dist-ssr
 *.njsproj
 *.sln
 *.sw?
+
+# OS files
+Thumbs.db
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# Testing
+coverage/
+.nyc_output/
+
+# Misc
+.cache/
+.temp/
+.tmp/

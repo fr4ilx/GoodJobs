@@ -1,10 +1,11 @@
 
 export interface UserPreferences {
-  jobTitle: string;
-  location: string;
+  jobTitle: string | string[];
+  location: string | string[];
   workType: 'Remote' | 'Hybrid' | 'On-site' | 'All';
   requiresSponsorship: boolean;
-  minSalary?: string;
+  yearsOfExperience: 'New Graduate' | '1-2 years' | '2-5 years' | '5+ years';
+  desiredSalary?: string;
 }
 
 export interface Job {
@@ -25,6 +26,9 @@ export interface UserProfile {
   resumeContent: string;
   email: string;
   preferences?: UserPreferences;
+  resumeFiles?: File[];
+  projectFiles?: File[];
+  projectLinks?: string[];
 }
 
 export enum NavItem {

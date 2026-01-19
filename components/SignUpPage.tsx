@@ -1,31 +1,63 @@
+import React, { useState } from 'react';
+import { signUpWithEmail, signInWithGoogle } from '../services/authService';
 
-import React, { useState, useEffect } from 'react';
-
-interface AuthPageProps {
-  onLogin: (email: string, name: string, isNewUser: boolean) => void;
+interface SignUpPageProps {
   onBack: () => void;
-  initialMode?: 'login' | 'signup';
+  onSwitchToSignIn: () => void;
 }
 
-const AuthPage: React.FC<AuthPageProps> = ({ onLogin, onBack, initialMode = 'login' }) => {
-  const [isLogin, setIsLogin] = useState(initialMode === 'login');
+const SignUpPage: React.FC<SignUpPageProps> = ({ onBack, onSwitchToSignIn }) => {
   const [email, setEmail] = useState('');
+  const [password, setPassword] = useState('');
+  const [confirmPassword, setConfirmPassword] = useState('');
   const [name, setName] = useState('');
   const [isLoading, setIsLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
 
-  useEffect(() => {
-    setIsLogin(initialMode === 'login');
-  }, [initialMode]);
-
-  const handleSubmit = (e: React.FormEvent) => {
+  const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
+    setError(null);
+
+    // Validation
+    if (password !== confirmPassword) {
+      setError('Passwords do not match');
+      return;
+    }
+
+    if (password.length < 6) {
+      setError('Password must be at least 6 characters');
+      return;
+    }
+
+    if (!name.trim()) {
+      setError('Please enter your full name');
+      return;
+    }
+
     setIsLoading(true);
-    // Simulate API delay
-    setTimeout(() => {
-      // If we are in 'signup' mode (not isLogin), it's a new user
-      onLogin(email || 'steven@example.com', name || 'Steven', !isLogin);
+
+    try {
+      await signUpWithEmail(email, password, name);
+      // User will be redirected automatically via AuthContext
+    } catch (err: any) {
+      setError(err.message || 'Failed to create account');
+    } finally {
       setIsLoading(false);
-    }, 1500);
+    }
+  };
+
+  const handleGoogleSignIn = async () => {
+    setError(null);
+    setIsLoading(true);
+
+    try {
+      await signInWithGoogle();
+      // User will be redirected automatically via AuthContext
+    } catch (err: any) {
+      setError(err.message || 'Failed to sign in with Google');
+    } finally {
+      setIsLoading(false);
+    }
   };
 
   return (
@@ -52,50 +84,31 @@ const AuthPage: React.FC<AuthPageProps> = ({ onLogin, onBack, initialMode = 'log
                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2.5" d="M21 13.255A23.931 23.931 0 0112 15c-3.183 0-6.22-.62-9-1.745M16 6V4a2 2 0 00-2-2h-4a2 2 0 00-2 2v2m4 6h.01M5 20h14a2 2 0 002-2V8a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z" />
               </svg>
             </div>
-            <h2 className="text-3xl font-black text-slate-900 tracking-tight">
-              {isLogin ? 'Welcome Back' : 'Create Account'}
-            </h2>
-            <p className="text-slate-500 font-medium mt-2">
-              {isLogin ? 'Enter your details to access your dashboard' : 'Join thousands of professionals today'}
-            </p>
+            <h2 className="text-3xl font-black text-slate-900 tracking-tight">Create Account</h2>
+            <p className="text-slate-500 font-medium mt-2">Join thousands of professionals today</p>
           </div>
 
-          {/* Toggle Tabs */}
-          <div className="flex bg-slate-50 p-1.5 rounded-2xl mb-8 relative">
-            <div 
-              className={`absolute top-1.5 bottom-1.5 w-[calc(50%-6px)] bg-white rounded-xl shadow-sm transition-all duration-300 ease-out ${!isLogin ? 'translate-x-[calc(100%+6px)]' : 'translate-x-0'}`}
-            ></div>
-            <button 
-              onClick={() => setIsLogin(true)}
-              className={`flex-1 py-2.5 text-sm font-bold relative z-10 transition-colors ${isLogin ? 'text-indigo-600' : 'text-slate-400'}`}
-            >
-              Sign In
-            </button>
-            <button 
-              onClick={() => setIsLogin(false)}
-              className={`flex-1 py-2.5 text-sm font-bold relative z-10 transition-colors ${!isLogin ? 'text-indigo-600' : 'text-slate-400'}`}
-            >
-              Sign Up
-            </button>
-          </div>
+          {error && (
+            <div className="mb-6 p-4 bg-rose-50 border border-rose-200 rounded-2xl">
+              <p className="text-rose-600 text-sm font-bold">{error}</p>
+            </div>
+          )}
 
           <form onSubmit={handleSubmit} className="space-y-5">
-            {!isLogin && (
-              <div className="space-y-2">
-                <label className="text-xs font-black text-slate-400 uppercase tracking-widest ml-1">Full Name</label>
-                <div className="relative">
-                  <i className="fa-solid fa-user absolute left-4 top-1/2 -translate-y-1/2 text-slate-300"></i>
-                  <input 
-                    type="text" 
-                    required 
-                    value={name}
-                    onChange={(e) => setName(e.target.value)}
-                    className="w-full bg-slate-50 border border-slate-100 rounded-2xl py-4 pl-12 pr-4 text-slate-900 font-bold placeholder:text-slate-300 focus:bg-white focus:ring-2 focus:ring-indigo-100 focus:border-indigo-600 outline-none transition-all" 
-                    placeholder="John Doe" 
-                  />
-                </div>
+            <div className="space-y-2">
+              <label className="text-xs font-black text-slate-400 uppercase tracking-widest ml-1">Full Name</label>
+              <div className="relative">
+                <i className="fa-solid fa-user absolute left-4 top-1/2 -translate-y-1/2 text-slate-300"></i>
+                <input 
+                  type="text" 
+                  required 
+                  value={name}
+                  onChange={(e) => setName(e.target.value)}
+                  className="w-full bg-slate-50 border border-slate-100 rounded-2xl py-4 pl-12 pr-4 text-slate-900 font-bold placeholder:text-slate-300 focus:bg-white focus:ring-2 focus:ring-indigo-100 focus:border-indigo-600 outline-none transition-all" 
+                  placeholder="John Doe" 
+                />
               </div>
-            )}
+            </div>
 
             <div className="space-y-2">
               <label className="text-xs font-black text-slate-400 uppercase tracking-widest ml-1">Email Address</label>
@@ -113,17 +126,33 @@ const AuthPage: React.FC<AuthPageProps> = ({ onLogin, onBack, initialMode = 'log
             </div>
 
             <div className="space-y-2">
-              <div className="flex justify-between items-center">
-                <label className="text-xs font-black text-slate-400 uppercase tracking-widest ml-1">Password</label>
-                {isLogin && <a href="#" className="text-xs font-bold text-indigo-600 hover:underline">Forgot?</a>}
-              </div>
+              <label className="text-xs font-black text-slate-400 uppercase tracking-widest ml-1">Password</label>
               <div className="relative">
                 <i className="fa-solid fa-lock absolute left-4 top-1/2 -translate-y-1/2 text-slate-300"></i>
                 <input 
                   type="password" 
                   required 
+                  value={password}
+                  onChange={(e) => setPassword(e.target.value)}
                   className="w-full bg-slate-50 border border-slate-100 rounded-2xl py-4 pl-12 pr-4 text-slate-900 font-bold placeholder:text-slate-300 focus:bg-white focus:ring-2 focus:ring-indigo-100 focus:border-indigo-600 outline-none transition-all" 
-                  placeholder="••••••••" 
+                  placeholder="••••••••"
+                  minLength={6}
+                />
+              </div>
+            </div>
+
+            <div className="space-y-2">
+              <label className="text-xs font-black text-slate-400 uppercase tracking-widest ml-1">Confirm Password</label>
+              <div className="relative">
+                <i className="fa-solid fa-lock absolute left-4 top-1/2 -translate-y-1/2 text-slate-300"></i>
+                <input 
+                  type="password" 
+                  required 
+                  value={confirmPassword}
+                  onChange={(e) => setConfirmPassword(e.target.value)}
+                  className="w-full bg-slate-50 border border-slate-100 rounded-2xl py-4 pl-12 pr-4 text-slate-900 font-bold placeholder:text-slate-300 focus:bg-white focus:ring-2 focus:ring-indigo-100 focus:border-indigo-600 outline-none transition-all" 
+                  placeholder="••••••••"
+                  minLength={6}
                 />
               </div>
             </div>
@@ -136,7 +165,7 @@ const AuthPage: React.FC<AuthPageProps> = ({ onLogin, onBack, initialMode = 'log
               {isLoading ? (
                 <i className="fa-solid fa-circle-notch animate-spin"></i>
               ) : (
-                isLogin ? 'Sign In' : 'Create Account'
+                'Create Account'
               )}
             </button>
           </form>
@@ -147,14 +176,33 @@ const AuthPage: React.FC<AuthPageProps> = ({ onLogin, onBack, initialMode = 'log
           </div>
 
           <div className="grid grid-cols-2 gap-4">
-            <button className="flex items-center justify-center gap-3 py-4 border border-slate-100 rounded-2xl hover:bg-slate-50 transition-all group">
+            <button 
+              onClick={handleGoogleSignIn}
+              disabled={isLoading}
+              className="flex items-center justify-center gap-3 py-4 border border-slate-100 rounded-2xl hover:bg-slate-50 transition-all group disabled:opacity-70"
+            >
               <i className="fa-brands fa-google text-slate-400 group-hover:text-red-500 transition-colors"></i>
               <span className="text-sm font-bold text-slate-600">Google</span>
             </button>
-            <button className="flex items-center justify-center gap-3 py-4 border border-slate-100 rounded-2xl hover:bg-slate-50 transition-all group">
+            <button 
+              disabled={isLoading}
+              className="flex items-center justify-center gap-3 py-4 border border-slate-100 rounded-2xl hover:bg-slate-50 transition-all group disabled:opacity-70"
+            >
               <i className="fa-brands fa-linkedin text-slate-400 group-hover:text-blue-600 transition-colors"></i>
               <span className="text-sm font-bold text-slate-600">LinkedIn</span>
             </button>
+          </div>
+
+          <div className="mt-8 text-center">
+            <p className="text-slate-500 text-sm">
+              Already have an account?{' '}
+              <button 
+                onClick={onSwitchToSignIn}
+                className="text-indigo-600 font-bold hover:underline"
+              >
+                Sign In
+              </button>
+            </p>
           </div>
         </div>
       </div>
@@ -162,4 +210,4 @@ const AuthPage: React.FC<AuthPageProps> = ({ onLogin, onBack, initialMode = 'log
   );
 };
 
-export default AuthPage;
+export default SignUpPage;

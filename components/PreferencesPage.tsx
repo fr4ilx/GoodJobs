@@ -1,23 +1,191 @@
-
-import React, { useState } from 'react';
+import React, { useState, useRef, useEffect } from 'react';
 import { UserPreferences } from '../types';
+import { JOB_TITLES, LOCATIONS } from '../data/jobTitles';
 
 interface PreferencesPageProps {
   onComplete: (prefs: UserPreferences) => void;
+  onBack?: () => void;
+  onSignIn?: () => void;
 }
 
-const PreferencesPage: React.FC<PreferencesPageProps> = ({ onComplete }) => {
+const PreferencesPage: React.FC<PreferencesPageProps> = ({ onComplete, onBack, onSignIn }) => {
   const [prefs, setPrefs] = useState<UserPreferences>({
-    jobTitle: '',
-    location: '',
+    jobTitle: [],
+    location: [],
     workType: 'All',
     requiresSponsorship: false,
+    yearsOfExperience: 'New Graduate',
+    desiredSalary: '',
   });
 
-  const categories = ['Software Engineering', 'Data Science', 'Product Management', 'Design', 'Marketing'];
+  const [jobTitleQuery, setJobTitleQuery] = useState('');
+  const [locationQuery, setLocationQuery] = useState('');
+  const [showJobTitleDropdown, setShowJobTitleDropdown] = useState(false);
+  const [showLocationDropdown, setShowLocationDropdown] = useState(false);
+  const [highlightedJobIndex, setHighlightedJobIndex] = useState(-1);
+  const [highlightedLocationIndex, setHighlightedLocationIndex] = useState(-1);
+
+  const jobTitleInputRef = useRef<HTMLInputElement>(null);
+  const locationInputRef = useRef<HTMLInputElement>(null);
+  const jobDropdownRef = useRef<HTMLDivElement>(null);
+  const locationDropdownRef = useRef<HTMLDivElement>(null);
+
+  const selectedJobTitles = Array.isArray(prefs.jobTitle) ? prefs.jobTitle : [prefs.jobTitle].filter(Boolean);
+  const selectedLocations = Array.isArray(prefs.location) ? prefs.location : [prefs.location].filter(Boolean);
+
+  // Fuzzy search function
+  const fuzzyMatch = (query: string, target: string): boolean => {
+    if (!query) return true;
+    const queryLower = query.toLowerCase();
+    const targetLower = target.toLowerCase();
+    
+    // Direct substring match
+    if (targetLower.includes(queryLower)) return true;
+    
+    // Fuzzy match: all characters from query appear in order in target
+    let queryIndex = 0;
+    for (let i = 0; i < targetLower.length && queryIndex < queryLower.length; i++) {
+      if (targetLower[i] === queryLower[queryIndex]) {
+        queryIndex++;
+      }
+    }
+    return queryIndex === queryLower.length;
+  };
+
+  // Filter job titles based on query
+  const filteredJobTitles = JOB_TITLES.filter(title => 
+    fuzzyMatch(jobTitleQuery, title)
+  ).slice(0, 8);
+
+  // Filter locations based on query
+  const filteredLocations = LOCATIONS.filter(location => 
+    fuzzyMatch(locationQuery, location)
+  ).slice(0, 8);
+
+  // Handle job title selection
+  const handleJobTitleSelect = (title: string) => {
+    if (!selectedJobTitles.includes(title)) {
+      setPrefs({...prefs, jobTitle: [...selectedJobTitles, title]});
+    }
+    setJobTitleQuery('');
+    setShowJobTitleDropdown(false);
+    setHighlightedJobIndex(-1);
+    jobTitleInputRef.current?.focus();
+  };
+
+  // Handle location selection
+  const handleLocationSelect = (location: string) => {
+    if (!selectedLocations.includes(location)) {
+      setPrefs({...prefs, location: [...selectedLocations, location]});
+    }
+    setLocationQuery('');
+    setShowLocationDropdown(false);
+    setHighlightedLocationIndex(-1);
+    locationInputRef.current?.focus();
+  };
+
+  // Remove a specific job title
+  const removeJobTitle = (titleToRemove: string) => {
+    setPrefs({
+      ...prefs, 
+      jobTitle: selectedJobTitles.filter(t => t !== titleToRemove)
+    });
+  };
+
+  // Remove a specific location
+  const removeLocation = (locationToRemove: string) => {
+    setPrefs({
+      ...prefs, 
+      location: selectedLocations.filter(l => l !== locationToRemove)
+    });
+  };
+
+  // Handle job title input change
+  const handleJobTitleChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const value = e.target.value;
+    setJobTitleQuery(value);
+    setShowJobTitleDropdown(true);
+    setHighlightedJobIndex(-1);
+  };
+
+  // Handle location input change
+  const handleLocationChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const value = e.target.value;
+    setLocationQuery(value);
+    setShowLocationDropdown(true);
+    setHighlightedLocationIndex(-1);
+  };
+
+  // Keyboard navigation for job titles
+  const handleJobTitleKeyDown = (e: React.KeyboardEvent) => {
+    if (!showJobTitleDropdown) return;
+
+    if (e.key === 'ArrowDown') {
+      e.preventDefault();
+      setHighlightedJobIndex(prev => 
+        prev < filteredJobTitles.length - 1 ? prev + 1 : prev
+      );
+    } else if (e.key === 'ArrowUp') {
+      e.preventDefault();
+      setHighlightedJobIndex(prev => prev > 0 ? prev - 1 : -1);
+    } else if (e.key === 'Enter' && highlightedJobIndex >= 0) {
+      e.preventDefault();
+      handleJobTitleSelect(filteredJobTitles[highlightedJobIndex]);
+    } else if (e.key === 'Escape') {
+      setShowJobTitleDropdown(false);
+      setHighlightedJobIndex(-1);
+    }
+  };
+
+  // Keyboard navigation for locations
+  const handleLocationKeyDown = (e: React.KeyboardEvent) => {
+    if (!showLocationDropdown) return;
+
+    if (e.key === 'ArrowDown') {
+      e.preventDefault();
+      setHighlightedLocationIndex(prev => 
+        prev < filteredLocations.length - 1 ? prev + 1 : prev
+      );
+    } else if (e.key === 'ArrowUp') {
+      e.preventDefault();
+      setHighlightedLocationIndex(prev => prev > 0 ? prev - 1 : -1);
+    } else if (e.key === 'Enter' && highlightedLocationIndex >= 0) {
+      e.preventDefault();
+      handleLocationSelect(filteredLocations[highlightedLocationIndex]);
+    } else if (e.key === 'Escape') {
+      setShowLocationDropdown(false);
+      setHighlightedLocationIndex(-1);
+    }
+  };
+
+  // Close dropdowns when clicking outside
+  useEffect(() => {
+    const handleClickOutside = (event: MouseEvent) => {
+      if (
+        jobDropdownRef.current && 
+        !jobDropdownRef.current.contains(event.target as Node) &&
+        !jobTitleInputRef.current?.contains(event.target as Node)
+      ) {
+        setShowJobTitleDropdown(false);
+      }
+      if (
+        locationDropdownRef.current && 
+        !locationDropdownRef.current.contains(event.target as Node) &&
+        !locationInputRef.current?.contains(event.target as Node)
+      ) {
+        setShowLocationDropdown(false);
+      }
+    };
+
+    document.addEventListener('mousedown', handleClickOutside);
+    return () => document.removeEventListener('mousedown', handleClickOutside);
+  }, []);
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
+    if (selectedJobTitles.length === 0 || selectedLocations.length === 0) {
+      return; // Require at least one selection for each
+    }
     onComplete(prefs);
   };
 
@@ -28,6 +196,16 @@ const PreferencesPage: React.FC<PreferencesPageProps> = ({ onComplete }) => {
       <div className="absolute bottom-0 left-0 w-[30%] h-[30%] bg-purple-100/50 rounded-full blur-[100px] pointer-events-none"></div>
 
       <div className="w-full max-w-2xl relative z-10 animate-in fade-in slide-in-from-bottom-8 duration-700">
+        {onBack && (
+          <button 
+            onClick={onBack}
+            className="mb-8 flex items-center gap-2 text-slate-400 hover:text-indigo-600 font-bold text-sm transition-colors group"
+          >
+            <i className="fa-solid fa-arrow-left group-hover:-translate-x-1 transition-transform"></i>
+            Back
+          </button>
+        )}
+
         <div className="bg-white rounded-[2.5rem] shadow-2xl shadow-indigo-100/50 p-12 border border-slate-100">
           
           {/* Header & Progress */}
@@ -42,45 +220,135 @@ const PreferencesPage: React.FC<PreferencesPageProps> = ({ onComplete }) => {
           </div>
 
           <form onSubmit={handleSubmit} className="space-y-8">
-            {/* Job Title */}
-            <div className="space-y-3">
-              <label className="text-xs font-black text-slate-400 uppercase tracking-widest ml-1">Desired Job Title</label>
+            {/* Job Title with Autocomplete */}
+            <div className="space-y-3 relative">
+              <label className="text-xs font-black text-slate-400 uppercase tracking-widest ml-1">
+                Desired Job Title{selectedJobTitles.length > 0 && <span className="ml-1 text-indigo-600">({selectedJobTitles.length} selected)</span>}
+              </label>
               <input 
+                ref={jobTitleInputRef}
                 type="text" 
-                required
-                value={prefs.jobTitle}
-                onChange={(e) => setPrefs({...prefs, jobTitle: e.target.value})}
+                value={jobTitleQuery}
+                onChange={handleJobTitleChange}
+                onFocus={() => setShowJobTitleDropdown(true)}
+                onKeyDown={handleJobTitleKeyDown}
                 className="w-full bg-slate-50 border border-slate-100 rounded-2xl py-4 px-6 text-slate-900 font-bold placeholder:text-slate-300 focus:bg-white focus:ring-2 focus:ring-indigo-100 focus:border-indigo-600 outline-none transition-all" 
-                placeholder="e.g. Senior Frontend Engineer" 
+                placeholder="Type to search and add job titles..." 
+                autoComplete="off"
               />
-              <div className="flex flex-wrap gap-2 pt-1">
-                 {categories.slice(0, 3).map(cat => (
-                   <button 
-                     key={cat}
-                     type="button"
-                     onClick={() => setPrefs({...prefs, jobTitle: cat})}
-                     className="text-[10px] font-black uppercase tracking-wider px-3 py-1 bg-indigo-50 text-indigo-600 rounded-lg hover:bg-indigo-100 transition-colors"
-                   >
-                     {cat}
-                   </button>
-                 ))}
-              </div>
+              
+              {/* Dropdown */}
+              {showJobTitleDropdown && filteredJobTitles.length > 0 && (
+                <div 
+                  ref={jobDropdownRef}
+                  className="absolute z-50 w-full mt-2 bg-white border border-slate-200 rounded-2xl shadow-xl max-h-64 overflow-y-auto"
+                >
+                  {filteredJobTitles.filter(title => !selectedJobTitles.includes(title)).map((title, index) => (
+                    <button
+                      key={title}
+                      type="button"
+                      onClick={() => handleJobTitleSelect(title)}
+                      className={`w-full text-left px-5 py-3 text-sm font-bold transition-colors ${
+                        index === highlightedJobIndex
+                          ? 'bg-indigo-50 text-indigo-600'
+                          : 'text-slate-700 hover:bg-slate-50'
+                      } ${index === 0 ? 'rounded-t-2xl' : ''} ${
+                        index === filteredJobTitles.filter(t => !selectedJobTitles.includes(t)).length - 1 ? 'rounded-b-2xl' : ''
+                      }`}
+                    >
+                      {title}
+                    </button>
+                  ))}
+                </div>
+              )}
+
+              {/* Selected Job Titles Display */}
+              {selectedJobTitles.length > 0 && (
+                <div className="flex flex-wrap gap-2 pt-1">
+                  {selectedJobTitles.map((title) => (
+                    <div 
+                      key={title}
+                      className="inline-flex items-center gap-2 text-[10px] font-black uppercase tracking-wider px-3 py-1.5 bg-indigo-50 text-indigo-600 rounded-lg border-2 border-indigo-200 animate-in fade-in zoom-in-95 duration-200"
+                    >
+                      <span>{title}</span>
+                      <button
+                        type="button"
+                        onClick={() => removeJobTitle(title)}
+                        className="hover:bg-indigo-200 rounded-full w-4 h-4 flex items-center justify-center transition-colors"
+                      >
+                        <i className="fa-solid fa-times text-[10px]"></i>
+                      </button>
+                    </div>
+                  ))}
+                </div>
+              )}
             </div>
 
-            {/* Location */}
-            <div className="space-y-3">
-              <label className="text-xs font-black text-slate-400 uppercase tracking-widest ml-1">Preferred Location</label>
+            {/* Location with Autocomplete */}
+            <div className="space-y-3 relative">
+              <label className="text-xs font-black text-slate-400 uppercase tracking-widest ml-1">
+                Preferred Location{selectedLocations.length > 0 && <span className="ml-1 text-purple-600">({selectedLocations.length} selected)</span>}
+              </label>
               <div className="relative">
-                <i className="fa-solid fa-location-dot absolute left-5 top-1/2 -translate-y-1/2 text-slate-300"></i>
+                <i className="fa-solid fa-location-dot absolute left-5 top-1/2 -translate-y-1/2 text-slate-300 z-10"></i>
                 <input 
+                  ref={locationInputRef}
                   type="text" 
-                  required
-                  value={prefs.location}
-                  onChange={(e) => setPrefs({...prefs, location: e.target.value})}
+                  value={locationQuery}
+                  onChange={handleLocationChange}
+                  onFocus={() => setShowLocationDropdown(true)}
+                  onKeyDown={handleLocationKeyDown}
                   className="w-full bg-slate-50 border border-slate-100 rounded-2xl py-4 pl-12 pr-6 text-slate-900 font-bold placeholder:text-slate-300 focus:bg-white focus:ring-2 focus:ring-indigo-100 focus:border-indigo-600 outline-none transition-all" 
-                  placeholder="e.g. San Francisco, CA or Remote" 
+                  placeholder="Type to search and add locations..." 
+                  autoComplete="off"
                 />
               </div>
+              
+              {/* Dropdown */}
+              {showLocationDropdown && filteredLocations.length > 0 && (
+                <div 
+                  ref={locationDropdownRef}
+                  className="absolute z-50 w-full mt-2 bg-white border border-slate-200 rounded-2xl shadow-xl max-h-64 overflow-y-auto"
+                >
+                  {filteredLocations.filter(location => !selectedLocations.includes(location)).map((location, index) => (
+                    <button
+                      key={location}
+                      type="button"
+                      onClick={() => handleLocationSelect(location)}
+                      className={`w-full text-left px-5 py-3 text-sm font-bold transition-colors ${
+                        index === highlightedLocationIndex
+                          ? 'bg-indigo-50 text-indigo-600'
+                          : 'text-slate-700 hover:bg-slate-50'
+                      } ${index === 0 ? 'rounded-t-2xl' : ''} ${
+                        index === filteredLocations.filter(l => !selectedLocations.includes(l)).length - 1 ? 'rounded-b-2xl' : ''
+                      }`}
+                    >
+                      {location}
+                    </button>
+                  ))}
+                </div>
+              )}
+
+              {/* Selected Locations Display */}
+              {selectedLocations.length > 0 && (
+                <div className="flex flex-wrap gap-2 pt-1">
+                  {selectedLocations.map((location) => (
+                    <div 
+                      key={location}
+                      className="inline-flex items-center gap-2 text-[10px] font-black uppercase tracking-wider px-3 py-1.5 bg-purple-50 text-purple-600 rounded-lg border-2 border-purple-200 animate-in fade-in zoom-in-95 duration-200"
+                    >
+                      <span>{location}</span>
+                      <button
+                        type="button"
+                        onClick={() => removeLocation(location)}
+                        className="hover:bg-purple-200 rounded-full w-4 h-4 flex items-center justify-center transition-colors"
+                      >
+                        <i className="fa-solid fa-times text-[10px]"></i>
+                      </button>
+                    </div>
+                  ))}
+                </div>
+              )}
             </div>
 
             {/* Work Type & Sponsorship Row */}
@@ -130,6 +398,48 @@ const PreferencesPage: React.FC<PreferencesPageProps> = ({ onComplete }) => {
               </div>
             </div>
 
+            {/* Years of Experience & Desired Salary Row */}
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-8 pt-4">
+              <div className="space-y-3">
+                <label className="text-xs font-black text-slate-400 uppercase tracking-widest ml-1">
+                  Years of Experience <span className="text-rose-500">*</span>
+                </label>
+                <div className="grid grid-cols-2 gap-2">
+                  {['New Graduate', '1-2 years', '2-5 years', '5+ years'].map((exp) => (
+                    <button
+                      key={exp}
+                      type="button"
+                      onClick={() => setPrefs({...prefs, yearsOfExperience: exp as any})}
+                      className={`py-3 rounded-xl text-sm font-bold transition-all border-2 ${
+                        prefs.yearsOfExperience === exp 
+                          ? 'bg-emerald-600 border-emerald-600 text-white shadow-lg shadow-emerald-100' 
+                          : 'bg-white border-slate-100 text-slate-500 hover:border-emerald-100'
+                      }`}
+                    >
+                      {exp}
+                    </button>
+                  ))}
+                </div>
+              </div>
+
+              <div className="space-y-3">
+                <label className="text-xs font-black text-slate-400 uppercase tracking-widest ml-1">
+                  Desired Salary <span className="text-slate-400 text-[10px]">(Optional)</span>
+                </label>
+                <div className="relative">
+                  <span className="absolute left-5 top-1/2 -translate-y-1/2 text-slate-400 font-bold">$</span>
+                  <input 
+                    type="number"
+                    value={prefs.desiredSalary}
+                    onChange={(e) => setPrefs({...prefs, desiredSalary: e.target.value})}
+                    className="w-full bg-slate-50 border border-slate-100 rounded-2xl py-4 pl-10 pr-6 text-slate-900 font-bold placeholder:text-slate-300 focus:bg-white focus:ring-2 focus:ring-indigo-100 focus:border-indigo-600 outline-none transition-all" 
+                    placeholder="85000"
+                  />
+                </div>
+                <p className="text-[10px] text-slate-400 italic px-2">Annual salary in USD</p>
+              </div>
+            </div>
+
             <button 
               type="submit"
               className="w-full bg-slate-900 text-white py-5 rounded-2xl font-black text-lg shadow-xl shadow-slate-200 hover:bg-indigo-600 hover:scale-[1.02] active:scale-[0.98] transition-all flex items-center justify-center gap-3 mt-4"
@@ -138,6 +448,20 @@ const PreferencesPage: React.FC<PreferencesPageProps> = ({ onComplete }) => {
               <i className="fa-solid fa-arrow-right"></i>
             </button>
           </form>
+
+          {onSignIn && (
+            <div className="mt-6 text-center">
+              <p className="text-slate-500 text-sm">
+                Already have an account?{' '}
+                <button 
+                  onClick={onSignIn}
+                  className="text-indigo-600 font-bold hover:underline"
+                >
+                  Sign In
+                </button>
+              </p>
+            </div>
+          )}
         </div>
       </div>
     </div>
