@@ -14,8 +14,8 @@ const PreferencesPage: React.FC<PreferencesPageProps> = ({ onComplete, onBack, o
     location: [],
     workType: 'All',
     requiresSponsorship: false,
-    yearsOfExperience: 'New Graduate',
-    desiredSalary: '',
+    yearsOfExperience: 'Entry level',
+    contractType: 'Full-time',
   });
 
   const [jobTitleQuery, setJobTitleQuery] = useState('');
@@ -220,10 +220,10 @@ const PreferencesPage: React.FC<PreferencesPageProps> = ({ onComplete, onBack, o
           </div>
 
           <form onSubmit={handleSubmit} className="space-y-8">
-            {/* Job Title with Autocomplete */}
+            {/* Target Role with Autocomplete */}
             <div className="space-y-3 relative">
               <label className="text-xs font-black text-slate-400 uppercase tracking-widest ml-1">
-                Desired Job Title{selectedJobTitles.length > 0 && <span className="ml-1 text-indigo-600">({selectedJobTitles.length} selected)</span>}
+                Target Role{selectedJobTitles.length > 0 && <span className="ml-1 text-indigo-600">({selectedJobTitles.length} selected)</span>}
               </label>
               <input 
                 ref={jobTitleInputRef}
@@ -351,10 +351,10 @@ const PreferencesPage: React.FC<PreferencesPageProps> = ({ onComplete, onBack, o
               )}
             </div>
 
-            {/* Work Type & Sponsorship Row */}
+            {/* Working Modality & Sponsorship Row */}
             <div className="grid grid-cols-1 md:grid-cols-2 gap-8">
               <div className="space-y-3">
-                <label className="text-xs font-black text-slate-400 uppercase tracking-widest ml-1">Work Environment</label>
+                <label className="text-xs font-black text-slate-400 uppercase tracking-widest ml-1">Working Modality</label>
                 <div className="grid grid-cols-2 gap-2">
                   {['Remote', 'Hybrid', 'On-site', 'All'].map((type) => (
                     <button
@@ -398,14 +398,14 @@ const PreferencesPage: React.FC<PreferencesPageProps> = ({ onComplete, onBack, o
               </div>
             </div>
 
-            {/* Years of Experience & Desired Salary Row */}
+            {/* Experience Level & Contract Type Row */}
             <div className="grid grid-cols-1 md:grid-cols-2 gap-8 pt-4">
               <div className="space-y-3">
                 <label className="text-xs font-black text-slate-400 uppercase tracking-widest ml-1">
-                  Years of Experience <span className="text-rose-500">*</span>
+                  Experience Level <span className="text-rose-500">*</span>
                 </label>
                 <div className="grid grid-cols-2 gap-2">
-                  {['New Graduate', '1-2 years', '2-5 years', '5+ years'].map((exp) => (
+                  {['Internship', 'Entry level', 'Mid-level', 'Mid-Senior level', 'Senior level'].map((exp) => (
                     <button
                       key={exp}
                       type="button"
@@ -424,19 +424,24 @@ const PreferencesPage: React.FC<PreferencesPageProps> = ({ onComplete, onBack, o
 
               <div className="space-y-3">
                 <label className="text-xs font-black text-slate-400 uppercase tracking-widest ml-1">
-                  Desired Salary <span className="text-slate-400 text-[10px]">(Optional)</span>
+                  Contract Type <span className="text-slate-400 text-[10px]">(Optional)</span>
                 </label>
-                <div className="relative">
-                  <span className="absolute left-5 top-1/2 -translate-y-1/2 text-slate-400 font-bold">$</span>
-                  <input 
-                    type="number"
-                    value={prefs.desiredSalary}
-                    onChange={(e) => setPrefs({...prefs, desiredSalary: e.target.value})}
-                    className="w-full bg-slate-50 border border-slate-100 rounded-2xl py-4 pl-10 pr-6 text-slate-900 font-bold placeholder:text-slate-300 focus:bg-white focus:ring-2 focus:ring-indigo-100 focus:border-indigo-600 outline-none transition-all" 
-                    placeholder="85000"
-                  />
+                <div className="grid grid-cols-1 gap-2">
+                  {['Full-time', 'Part-time', 'Internship'].map((type) => (
+                    <button
+                      key={type}
+                      type="button"
+                      onClick={() => setPrefs({...prefs, contractType: type as any})}
+                      className={`py-3 rounded-xl text-sm font-bold transition-all border-2 ${
+                        prefs.contractType === type 
+                          ? 'bg-blue-600 border-blue-600 text-white shadow-lg shadow-blue-100' 
+                          : 'bg-white border-slate-100 text-slate-500 hover:border-blue-100'
+                      }`}
+                    >
+                      {type}
+                    </button>
+                  ))}
                 </div>
-                <p className="text-[10px] text-slate-400 italic px-2">Annual salary in USD</p>
               </div>
             </div>
 

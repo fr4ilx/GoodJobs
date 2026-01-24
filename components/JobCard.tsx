@@ -14,12 +14,15 @@ const JobCard: React.FC<JobCardProps> = ({ job, onClick }) => {
       className="bg-white rounded-[2rem] p-6 mb-6 shadow-sm hover:shadow-md transition-shadow cursor-pointer group flex items-center justify-between border border-transparent hover:border-indigo-100"
     >
       <div className="flex items-center gap-6">
-        <div className="w-16 h-16 rounded-2xl bg-black overflow-hidden flex items-center justify-center p-3 group-hover:scale-105 transition-transform">
-          <img src={job.logo} alt={job.company} className="w-full h-full object-contain opacity-90" />
+        <div className="w-16 h-16 rounded-2xl bg-gradient-to-br from-indigo-500 to-purple-600 flex items-center justify-center group-hover:scale-105 transition-transform">
+          <span className="text-white font-black text-xl">
+            {job.company ? job.company.charAt(0).toUpperCase() : '?'}
+          </span>
         </div>
         <div>
           <h3 className="text-xl font-bold text-slate-900 mb-1">{job.title}</h3>
-          <p className="text-slate-500 font-medium text-sm">{job.company} • {job.location}</p>
+          <p className="text-indigo-600 font-bold text-sm mb-1">{job.company}</p>
+          <p className="text-slate-500 font-medium text-xs">{job.location}</p>
         </div>
       </div>
 

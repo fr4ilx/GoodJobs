@@ -34,6 +34,13 @@ npm install
    - Create a new API key or use existing
    - Copy and paste into `.env.local`
 
+   **Get your Apify API token:**
+   - Go to: https://apify.com/ and sign up (free tier available)
+   - Go to: https://console.apify.com/account/integrations
+   - Create a new API token
+   - Copy and paste into `.env.local` as `VITE_APIFY_TOKEN=...`
+   - See [APIFY_SETUP.md](APIFY_SETUP.md) for detailed instructions
+
 ### 4. Firebase Configuration (Already Set Up!)
 
 The Firebase configuration is already included in the project at `config/firebase.ts`.

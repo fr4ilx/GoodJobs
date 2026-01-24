@@ -1,7 +1,6 @@
 
 import React, { useState, useEffect, useCallback, useMemo } from 'react';
 import { Job, NavItem, UserProfile, UserPreferences } from './types';
-import { MOCK_JOBS } from './constants';
 import Sidebar from './components/Sidebar';
 import JobCard from './components/JobCard';
 import LandingPage from './components/LandingPage';
@@ -15,6 +14,7 @@ import { calculateMatchScore } from './services/geminiService';
 import { useAuth } from './contexts/AuthContext';
 import { logOut } from './services/authService';
 import { saveUserPreferences, saveResumeData, saveUserProfile, getUserProfile } from './services/firestoreService';
+import { fetchJobsWithFilters } from './services/apifyService';
 
 const App: React.FC = () => {
   const { currentUser } = useAuth();
@@ -28,7 +28,9 @@ const App: React.FC = () => {
   const [showPreferencesModal, setShowPreferencesModal] = useState(false);
   const [usePreferencesFilter] = useState(true); 
   
-  const [jobs, setJobs] = useState<Job[]>(MOCK_JOBS);
+  const [jobs, setJobs] = useState<Job[]>([]);
+  const [jobsLoading, setJobsLoading] = useState(false);
+  const [jobsLoadingStatus, setJobsLoadingStatus] = useState<string>('');
   const [analysisProgress, setAnalysisProgress] = useState<{current: number, total: number} | null>(null);
   const [userProfile, setUserProfile] = useState<UserProfile>({
     name: 'Steven',
@@ -73,6 +75,54 @@ const App: React.FC = () => {
       setIsResumeComplete(false);
     }
   }, [currentUser]);
+
+  // Load jobs from Apify when user completes onboarding
+  useEffect(() => {
+    const loadJobs = async () => {
+      if (!currentUser || !isPreferencesComplete || !isResumeComplete) {
+        return;
+      }
+
+      try {
+        setJobsLoading(true);
+        setJobsLoadingStatus('Preparing to fetch jobs...');
+
+        const fetchedJobs = await fetchJobsWithFilters(
+          {
+            jobTitle: userProfile.preferences?.jobTitle,
+            location: userProfile.preferences?.location,
+            workType: userProfile.preferences?.workType,
+            yearsOfExperience: userProfile.preferences?.yearsOfExperience,
+            contractType: userProfile.preferences?.contractType
+          },
+          (status) => setJobsLoadingStatus(status)
+        );
+
+        setJobs(fetchedJobs);
+        setJobsLoadingStatus('');
+      } catch (error) {
+        console.error('Error loading jobs from Apify:', error);
+        const errorMessage = error instanceof Error ? error.message : 'Failed to load jobs';
+        setJobsLoadingStatus(`Error: ${errorMessage}`);
+        
+        // Show user-friendly error alert
+        if (errorMessage.includes('VITE_APIFY_TOKEN')) {
+          alert('Missing Apify API Token!\n\nPlease add VITE_APIFY_TOKEN to your .env.local file.\n\nSee APIFY_SETUP.md for instructions.');
+        } else {
+          console.error('Full error details:', error);
+        }
+        
+        // Keep existing jobs or set empty array
+        if (jobs.length === 0) {
+          setJobs([]);
+        }
+      } finally {
+        setJobsLoading(false);
+      }
+    };
+
+    loadJobs();
+  }, [currentUser, isPreferencesComplete, isResumeComplete, userProfile.preferences]);
 
   const handleStart = (mode: 'login' | 'signup') => {
     setAuthMode(mode);
@@ -137,15 +187,76 @@ const App: React.FC = () => {
   };
 
   const handleUpdatePreferences = async (newPrefs: UserPreferences) => {
-    if (currentUser) {
-      try {
+    console.log('🚀 handleUpdatePreferences called with:', newPrefs);
+    console.log('👤 currentUser:', currentUser ? 'exists' : 'null');
+    
+    try {
+      // Update user profile state immediately
+      setUserProfile(prev => ({ ...prev, preferences: newPrefs }));
+      
+      // Save preferences to Firestore (if user is logged in)
+      if (currentUser) {
+        console.log('💾 Saving preferences to Firestore...');
         await saveUserPreferences(currentUser.uid, newPrefs);
-        setUserProfile(prev => ({ ...prev, preferences: newPrefs }));
-        setShowPreferencesModal(false);
-      } catch (error) {
-        console.error('Error updating preferences:', error);
-        alert('Failed to update preferences. Please try again.');
+      } else {
+        console.warn('⚠️ No currentUser, skipping Firestore save');
       }
+      
+      // Close the modal
+      setShowPreferencesModal(false);
+      
+      // Clear existing jobs to show loading state
+      setJobs([]);
+      
+      // ALWAYS reload jobs with new preferences - this triggers a NEW API request
+      console.log('📡 Starting API call with updated preferences:', {
+        jobTitle: newPrefs.jobTitle,
+        location: newPrefs.location,
+        workType: newPrefs.workType,
+        yearsOfExperience: newPrefs.yearsOfExperience,
+        contractType: newPrefs.contractType
+      });
+      
+      setJobsLoading(true);
+      setJobsLoadingStatus('Fetching jobs with updated preferences...');
+      
+      try {
+        const fetchedJobs = await fetchJobsWithFilters(
+          {
+            jobTitle: newPrefs.jobTitle,
+            location: newPrefs.location,
+            workType: newPrefs.workType,
+            yearsOfExperience: newPrefs.yearsOfExperience,
+            contractType: newPrefs.contractType
+          },
+          (status) => {
+            console.log('📊 Progress update:', status);
+            setJobsLoadingStatus(status);
+          }
+        );
+        
+        console.log(`✅ Successfully fetched ${fetchedJobs.length} jobs with new preferences`);
+        console.log('📋 Jobs being set to state:', fetchedJobs.map(j => ({ id: j.id, title: j.title, company: j.company })));
+        setJobs(fetchedJobs);
+        setJobsLoadingStatus('');
+      } catch (error) {
+        console.error('❌ Error reloading jobs:', error);
+        const errorMessage = error instanceof Error ? error.message : 'Failed to reload jobs';
+        setJobsLoadingStatus(`Error: ${errorMessage}`);
+        
+        // Show user-friendly error alert
+        if (errorMessage.includes('VITE_APIFY_TOKEN')) {
+          alert('Missing Apify API Token!\n\nPlease add VITE_APIFY_TOKEN to your .env.local file.\n\nSee APIFY_SETUP.md for instructions.');
+        } else {
+          alert(`Failed to load jobs: ${errorMessage}\n\nCheck the console for more details.`);
+        }
+        // Keep existing jobs if there was an error
+      } finally {
+        setJobsLoading(false);
+      }
+    } catch (error) {
+      console.error('❌ Error in handleUpdatePreferences:', error);
+      alert('Failed to update preferences. Please try again.');
     }
   };
 
@@ -178,42 +289,18 @@ const App: React.FC = () => {
   }, [jobs, userProfile.resumeContent]);
 
   useEffect(() => {
-    if (currentUser && isPreferencesComplete && isResumeComplete) {
+    if (currentUser && isPreferencesComplete && isResumeComplete && jobs.length > 0 && !jobsLoading) {
       runAnalysis();
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [currentUser, isPreferencesComplete, isResumeComplete]);
+  }, [currentUser, isPreferencesComplete, isResumeComplete, jobs.length, jobsLoading]);
 
   const filteredJobs = useMemo(() => {
-    let result = [...jobs];
-
-    if (usePreferencesFilter && userProfile.preferences) {
-      const prefs = userProfile.preferences;
-      const jobTitles = Array.isArray(prefs.jobTitle) ? prefs.jobTitle : [prefs.jobTitle].filter(Boolean);
-      const locations = Array.isArray(prefs.location) ? prefs.location : [prefs.location].filter(Boolean);
-      
-      result = result.filter(j => {
-        const matchesTitle = jobTitles.length === 0 || jobTitles.some(title => 
-          j.title.toLowerCase().includes(title.toLowerCase()) || 
-          j.category.toLowerCase().includes(title.toLowerCase())
-        );
-        
-        const matchesLocation = locations.length === 0 || locations.some(location => 
-          location.toLowerCase() === 'remote' 
-            ? j.location.toLowerCase() === 'remote' 
-            : location.toLowerCase() === 'anywhere in us'
-            ? true
-            : j.location.toLowerCase().includes(location.toLowerCase())
-        );
-        
-        const matchesWorkType = prefs.workType === 'All' || j.type === prefs.workType;
-        
-        return matchesTitle && matchesLocation && matchesWorkType;
-      });
-    }
-
-    return result;
-  }, [jobs, usePreferencesFilter, userProfile.preferences]);
+    // Since the API already filters by preferences, just return all jobs
+    // The API handles: title, location, workType, experienceLevel, contractType
+    console.log(`📊 Displaying ${jobs.length} jobs (no additional client-side filtering)`);
+    return jobs;
+  }, [jobs]);
 
   const isMatching = analysisProgress !== null;
 
@@ -328,12 +415,6 @@ const App: React.FC = () => {
                       <i className="fa-solid fa-calendar-check text-teal-500"></i>
                       {userProfile.preferences.yearsOfExperience}
                     </div>
-                    {userProfile.preferences.desiredSalary && (
-                      <div className="flex items-center gap-2 bg-white px-4 py-2.5 rounded-2xl text-xs font-bold border border-slate-100 shadow-sm text-slate-600">
-                        <i className="fa-solid fa-dollar-sign text-amber-500"></i>
-                        ${parseInt(userProfile.preferences.desiredSalary).toLocaleString()}/yr
-                      </div>
-                    )}
                     {userProfile.preferences.requiresSponsorship && (
                       <div className="flex items-center gap-2 bg-rose-50 text-rose-600 px-4 py-2.5 rounded-2xl text-xs font-bold border border-rose-100/50 shadow-sm">
                         <i className="fa-solid fa-passport opacity-70"></i>
@@ -346,7 +427,18 @@ const App: React.FC = () => {
             </header>
 
             <div className="relative">
-              {isMatching && (
+              {jobsLoading && (
+                <div className="sticky top-0 mb-8 flex justify-center z-20">
+                  <div className="bg-blue-600 text-white text-[11px] font-black px-8 py-3 rounded-full shadow-2xl shadow-blue-200 flex items-center gap-3 animate-bounce">
+                    <i className="fa-solid fa-circle-notch animate-spin"></i>
+                    <span className="tracking-widest uppercase">
+                      {jobsLoadingStatus || 'Loading jobs from LinkedIn...'}
+                    </span>
+                  </div>
+                </div>
+              )}
+              
+              {isMatching && !jobsLoading && (
                 <div className="sticky top-0 mb-8 flex justify-center z-20">
                   <div className="bg-indigo-600 text-white text-[11px] font-black px-8 py-3 rounded-full shadow-2xl shadow-indigo-200 flex items-center gap-3 animate-bounce">
                     <i className="fa-solid fa-wand-magic-sparkles animate-pulse"></i>
@@ -358,7 +450,15 @@ const App: React.FC = () => {
               )}
               
               <div className="grid grid-cols-1 gap-4">
-                {filteredJobs.length > 0 ? (
+                {jobsLoading ? (
+                  <div className="text-center py-32 bg-white rounded-[3rem] border-2 border-dashed border-slate-100">
+                    <div className="w-20 h-20 bg-blue-50 rounded-full flex items-center justify-center mx-auto mb-6">
+                      <i className="fa-solid fa-circle-notch animate-spin text-2xl text-blue-600"></i>
+                    </div>
+                    <h3 className="text-xl font-bold text-slate-900 mb-2">Loading Jobs from LinkedIn</h3>
+                    <p className="text-slate-400 font-medium max-w-xs mx-auto">{jobsLoadingStatus || 'Fetching latest job listings...'}</p>
+                  </div>
+                ) : filteredJobs.length > 0 ? (
                   filteredJobs.map(job => (
                     <JobCard key={job.id} job={job} onClick={() => setSelectedJob(job)} />
                   ))
@@ -497,17 +597,9 @@ const App: React.FC = () => {
                          <p className="font-bold text-slate-900 truncate">{userProfile.preferences.requiresSponsorship ? 'Required' : 'Not Needed'}</p>
                       </div>
                       <div className="p-5 rounded-3xl bg-slate-50 border border-slate-100">
-                         <p className="text-[9px] font-black text-slate-300 uppercase tracking-widest mb-2">Years of Experience</p>
+                         <p className="text-[9px] font-black text-slate-300 uppercase tracking-widest mb-2">Experience Level</p>
                          <p className="font-bold text-slate-900 truncate">{userProfile.preferences.yearsOfExperience}</p>
                       </div>
-                      {userProfile.preferences.desiredSalary && (
-                        <div className="p-5 rounded-3xl bg-slate-50 border border-slate-100">
-                           <p className="text-[9px] font-black text-slate-300 uppercase tracking-widest mb-2">Desired Salary</p>
-                           <p className="font-bold text-slate-900 truncate">
-                             ${parseInt(userProfile.preferences.desiredSalary).toLocaleString()} / year
-                           </p>
-                        </div>
-                      )}
                    </div>
                  </div>
                );

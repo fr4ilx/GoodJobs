@@ -22,12 +22,15 @@ const JobDetailModal: React.FC<JobDetailModalProps> = ({ job, onClose }) => {
         {/* Header Section */}
         <div className="p-8 pb-4 flex justify-between items-start">
           <div className="flex items-center gap-5">
-            <div className="w-20 h-20 rounded-[1.5rem] bg-black p-4 flex items-center justify-center">
-              <img src={job.logo} alt={job.company} className="w-full h-full object-contain" />
+            <div className="w-20 h-20 rounded-[1.5rem] bg-gradient-to-br from-indigo-500 to-purple-600 flex items-center justify-center">
+              <span className="text-white font-black text-3xl">
+                {job.company ? job.company.charAt(0).toUpperCase() : '?'}
+              </span>
             </div>
             <div>
               <h2 className="text-3xl font-black text-slate-900 leading-tight">{job.title}</h2>
               <p className="text-indigo-600 font-bold text-lg">{job.company}</p>
+              <p className="text-slate-500 font-medium text-sm">{job.location}</p>
             </div>
           </div>
           <button 
@@ -90,24 +93,38 @@ const JobDetailModal: React.FC<JobDetailModalProps> = ({ job, onClose }) => {
               <i className="fa-solid fa-align-left text-indigo-500 text-sm"></i>
               Job Description
             </h4>
-            <div className="text-slate-600 leading-relaxed font-medium space-y-4">
-              <p>{job.description}</p>
-              <p>Key Responsibilities:</p>
-              <ul className="list-disc pl-5 space-y-2">
-                <li>Collaborate with cross-functional teams to define and ship new features.</li>
-                <li>Write clean, maintainable, and efficient code following industry best practices.</li>
-                <li>Participate in code reviews and contribute to architecture discussions.</li>
-                <li>Troubleshoot, test, and maintain core product software to ensure high performance.</li>
-              </ul>
+            <div 
+              className="text-slate-600 leading-relaxed font-medium whitespace-pre-wrap"
+              style={{
+                wordBreak: 'break-word',
+                overflowWrap: 'break-word',
+                maxWidth: '100%'
+              }}
+            >
+              {job.description}
             </div>
           </div>
         </div>
 
         {/* Footer Actions */}
         <div className="p-8 bg-slate-50 border-t border-slate-100 flex gap-4">
-          <button className="flex-1 bg-indigo-600 text-white py-5 rounded-2xl font-black text-lg shadow-xl shadow-indigo-100 hover:bg-indigo-700 hover:scale-[1.02] active:scale-[0.98] transition-all">
-            Apply Now
-          </button>
+          {job.jobUrl ? (
+            <a 
+              href={job.jobUrl}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="flex-1 bg-indigo-600 text-white py-5 rounded-2xl font-black text-lg shadow-xl shadow-indigo-100 hover:bg-indigo-700 hover:scale-[1.02] active:scale-[0.98] transition-all text-center"
+            >
+              Apply Now
+            </a>
+          ) : (
+            <button 
+              disabled
+              className="flex-1 bg-slate-300 text-white py-5 rounded-2xl font-black text-lg cursor-not-allowed opacity-50"
+            >
+              Apply Now
+            </button>
+          )}
           <button className="w-16 h-16 rounded-2xl border-2 border-slate-200 flex items-center justify-center text-slate-400 hover:text-indigo-600 hover:border-indigo-100 transition-all">
             <i className="fa-regular fa-bookmark text-xl"></i>
           </button>
