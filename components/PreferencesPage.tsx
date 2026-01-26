@@ -16,6 +16,10 @@ const PreferencesPage: React.FC<PreferencesPageProps> = ({ onComplete, onBack, o
     requiresSponsorship: false,
     yearsOfExperience: 'Entry level',
     contractType: 'Full-time',
+    yearsOfExperienceNumber: undefined,
+    desiredSalaryMin: undefined,
+    desiredSalaryMax: undefined,
+    securityClearance: 'None',
   });
 
   const [jobTitleQuery, setJobTitleQuery] = useState('');
@@ -223,7 +227,7 @@ const PreferencesPage: React.FC<PreferencesPageProps> = ({ onComplete, onBack, o
             {/* Target Role with Autocomplete */}
             <div className="space-y-3 relative">
               <label className="text-xs font-black text-slate-400 uppercase tracking-widest ml-1">
-                Target Role{selectedJobTitles.length > 0 && <span className="ml-1 text-indigo-600">({selectedJobTitles.length} selected)</span>}
+                Target Role <span className="text-rose-500">*</span>{selectedJobTitles.length > 0 && <span className="ml-1 text-indigo-600">({selectedJobTitles.length} selected)</span>}
               </label>
               <input 
                 ref={jobTitleInputRef}
@@ -287,7 +291,7 @@ const PreferencesPage: React.FC<PreferencesPageProps> = ({ onComplete, onBack, o
             {/* Location with Autocomplete */}
             <div className="space-y-3 relative">
               <label className="text-xs font-black text-slate-400 uppercase tracking-widest ml-1">
-                Preferred Location{selectedLocations.length > 0 && <span className="ml-1 text-purple-600">({selectedLocations.length} selected)</span>}
+                Preferred Location <span className="text-rose-500">*</span>{selectedLocations.length > 0 && <span className="ml-1 text-purple-600">({selectedLocations.length} selected)</span>}
               </label>
               <div className="relative">
                 <i className="fa-solid fa-location-dot absolute left-5 top-1/2 -translate-y-1/2 text-slate-300 z-10"></i>
@@ -298,8 +302,8 @@ const PreferencesPage: React.FC<PreferencesPageProps> = ({ onComplete, onBack, o
                   onChange={handleLocationChange}
                   onFocus={() => setShowLocationDropdown(true)}
                   onKeyDown={handleLocationKeyDown}
-                  className="w-full bg-slate-50 border border-slate-100 rounded-2xl py-4 pl-12 pr-6 text-slate-900 font-bold placeholder:text-slate-300 focus:bg-white focus:ring-2 focus:ring-indigo-100 focus:border-indigo-600 outline-none transition-all" 
-                  placeholder="Type to search and add locations..." 
+                  className="w-full bg-slate-50 border border-slate-100 rounded-2xl py-4 pl-12 pr-6 text-slate-900 font-bold placeholder:text-slate-400 focus:bg-white focus:ring-2 focus:ring-indigo-100 focus:border-indigo-600 outline-none transition-all" 
+                  placeholder="Anywhere in US" 
                   autoComplete="off"
                 />
               </div>
@@ -354,7 +358,7 @@ const PreferencesPage: React.FC<PreferencesPageProps> = ({ onComplete, onBack, o
             {/* Working Modality & Sponsorship Row */}
             <div className="grid grid-cols-1 md:grid-cols-2 gap-8">
               <div className="space-y-3">
-                <label className="text-xs font-black text-slate-400 uppercase tracking-widest ml-1">Working Modality</label>
+                <label className="text-xs font-black text-slate-400 uppercase tracking-widest ml-1">Working Modality <span className="text-rose-500">*</span></label>
                 <div className="grid grid-cols-2 gap-2">
                   {['Remote', 'Hybrid', 'On-site', 'All'].map((type) => (
                     <button
@@ -374,7 +378,7 @@ const PreferencesPage: React.FC<PreferencesPageProps> = ({ onComplete, onBack, o
               </div>
 
               <div className="space-y-3">
-                <label className="text-xs font-black text-slate-400 uppercase tracking-widest ml-1">Visa Sponsorship</label>
+                <label className="text-xs font-black text-slate-400 uppercase tracking-widest ml-1">Visa Sponsorship <span className="text-rose-500">*</span></label>
                 <div className="flex bg-slate-50 p-1 rounded-2xl border border-slate-100 relative h-[52px]">
                    <div 
                     className={`absolute top-1 bottom-1 w-[calc(50%-4px)] bg-white rounded-xl shadow-sm transition-all duration-300 ${prefs.requiresSponsorship ? 'translate-x-[calc(100%+4px)]' : 'translate-x-0'}`}
@@ -424,7 +428,7 @@ const PreferencesPage: React.FC<PreferencesPageProps> = ({ onComplete, onBack, o
 
               <div className="space-y-3">
                 <label className="text-xs font-black text-slate-400 uppercase tracking-widest ml-1">
-                  Contract Type <span className="text-slate-400 text-[10px]">(Optional)</span>
+                  Contract Type <span className="text-rose-500">*</span>
                 </label>
                 <div className="grid grid-cols-1 gap-2">
                   {['Full-time', 'Part-time', 'Internship'].map((type) => (
@@ -442,6 +446,74 @@ const PreferencesPage: React.FC<PreferencesPageProps> = ({ onComplete, onBack, o
                     </button>
                   ))}
                 </div>
+              </div>
+            </div>
+
+            {/* Years of Experience & Desired Salary Range Row */}
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-8 pt-4">
+              <div className="space-y-3">
+                <label className="text-xs font-black text-slate-400 uppercase tracking-widest ml-1">
+                  Years of Experience (Number) <span className="text-rose-500">*</span>
+                </label>
+                <input
+                  type="number"
+                  min="0"
+                  max="50"
+                  value={prefs.yearsOfExperienceNumber?.toString() || ''}
+                  onChange={(e) => setPrefs({...prefs, yearsOfExperienceNumber: e.target.value ? parseInt(e.target.value) : undefined})}
+                  className="w-full bg-slate-50 border border-slate-100 rounded-2xl py-4 px-6 text-slate-900 font-bold placeholder:text-slate-300 focus:bg-white focus:ring-2 focus:ring-indigo-100 focus:border-indigo-600 outline-none transition-all"
+                  placeholder="e.g. 5"
+                />
+              </div>
+
+              <div className="space-y-3">
+                <label className="text-xs font-black text-slate-400 uppercase tracking-widest ml-1">
+                  Desired Salary Range (USD) <span className="text-rose-500">*</span>
+                </label>
+                <div className="grid grid-cols-2 gap-2">
+                  <div className="relative">
+                    <span className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400 font-bold text-sm">$</span>
+                    <input
+                      type="number"
+                      min="0"
+                      value={prefs.desiredSalaryMin?.toString() || ''}
+                      onChange={(e) => setPrefs({...prefs, desiredSalaryMin: e.target.value ? parseInt(e.target.value) : undefined})}
+                      className="w-full bg-slate-50 border border-slate-100 rounded-xl py-3 pl-8 pr-3 text-slate-900 font-bold placeholder:text-slate-300 focus:bg-white focus:ring-2 focus:ring-indigo-100 focus:border-indigo-600 outline-none transition-all text-sm"
+                      placeholder="Min"
+                    />
+                  </div>
+                  <div className="relative">
+                    <span className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400 font-bold text-sm">$</span>
+                    <input
+                      type="number"
+                      min="0"
+                      value={prefs.desiredSalaryMax?.toString() || ''}
+                      onChange={(e) => setPrefs({...prefs, desiredSalaryMax: e.target.value ? parseInt(e.target.value) : undefined})}
+                      className="w-full bg-slate-50 border border-slate-100 rounded-xl py-3 pl-8 pr-3 text-slate-900 font-bold placeholder:text-slate-300 focus:bg-white focus:ring-2 focus:ring-indigo-100 focus:border-indigo-600 outline-none transition-all text-sm"
+                      placeholder="Max"
+                    />
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            {/* Security Clearance Row */}
+            <div className="pt-4">
+              <div className="space-y-3">
+                <label className="text-xs font-black text-slate-400 uppercase tracking-widest ml-1">
+                  Security Clearance <span className="text-rose-500">*</span>
+                </label>
+                <select
+                  value={prefs.securityClearance || 'None'}
+                  onChange={(e) => setPrefs({...prefs, securityClearance: e.target.value as any})}
+                  className="w-full bg-slate-50 border border-slate-100 rounded-2xl py-4 px-6 text-slate-900 font-bold focus:bg-white focus:ring-2 focus:ring-indigo-100 focus:border-indigo-600 outline-none transition-all"
+                >
+                  <option value="None">None</option>
+                  <option value="Public Trust">Public Trust</option>
+                  <option value="Secret">Secret</option>
+                  <option value="Top Secret">Top Secret</option>
+                  <option value="Top Secret/SCI">Top Secret/SCI</option>
+                </select>
               </div>
             </div>
 

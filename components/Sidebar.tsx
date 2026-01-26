@@ -9,10 +9,11 @@ interface SidebarProps {
 }
 
 const Sidebar: React.FC<SidebarProps> = ({ activeItem, onNavigate, onSignOut }) => {
-  const items = [
-    { name: NavItem.Jobs, icon: 'fa-briefcase' },
-    { name: NavItem.Resume, icon: 'fa-file-lines' },
-    { name: NavItem.Profile, icon: 'fa-circle-user' },
+  const items: Array<{ name: NavItem; icon: string; displayName: string }> = [
+    { name: NavItem.Jobs, icon: 'fa-briefcase', displayName: 'Jobs' },
+    { name: NavItem.Resume, icon: 'fa-file-lines', displayName: 'Resume & Projects' },
+    { name: NavItem.VisualizeSkills, icon: 'fa-diagram-project', displayName: 'Visualize Skills' },
+    { name: NavItem.Profile, icon: 'fa-circle-user', displayName: 'Profile' },
   ];
 
   return (
@@ -41,8 +42,10 @@ const Sidebar: React.FC<SidebarProps> = ({ activeItem, onNavigate, onSignOut }) 
                     : 'text-slate-400 hover:bg-slate-50 hover:text-slate-600'
                 }`}
               >
-                <i className={`fa-solid ${item.icon} text-lg transition-transform duration-200 group-hover:scale-110 ${activeItem === item.name ? 'text-indigo-600' : 'text-slate-300'}`}></i>
-                {item.name}
+                <span className="w-5 flex-shrink-0 flex items-center justify-center">
+                  <i className={`fa-solid ${item.icon} text-lg transition-transform duration-200 group-hover:scale-110 ${activeItem === item.name ? 'text-indigo-600' : 'text-slate-300'}`}></i>
+                </span>
+                {item.displayName}
               </button>
             </li>
           ))}

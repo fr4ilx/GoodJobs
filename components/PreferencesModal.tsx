@@ -22,9 +22,35 @@ const PreferencesModal: React.FC<PreferencesModalProps> = ({ currentPreferences,
   const jobDropdownRef = useRef<HTMLDivElement>(null);
   const locationDropdownRef = useRef<HTMLDivElement>(null);
 
+  // Local state for new fields
+  const [yearsOfExperienceNumber, setYearsOfExperienceNumber] = useState<string>(
+    currentPreferences.yearsOfExperienceNumber?.toString() || ''
+  );
+  const [salaryMin, setSalaryMin] = useState<string>(
+    currentPreferences.desiredSalaryMin?.toString() || ''
+  );
+  const [salaryMax, setSalaryMax] = useState<string>(
+    currentPreferences.desiredSalaryMax?.toString() || ''
+  );
+  const [securityClearance, setSecurityClearance] = useState<UserPreferences['securityClearance']>(
+    currentPreferences.securityClearance || 'None'
+  );
+
+  const securityClearanceOptions: UserPreferences['securityClearance'][] = [
+    'None',
+    'Public Trust',
+    'Secret',
+    'Top Secret',
+    'Top Secret/SCI'
+  ];
+
   // Sync prefs state when currentPreferences changes (e.g., when modal reopens)
   useEffect(() => {
     setPrefs(currentPreferences);
+    setYearsOfExperienceNumber(currentPreferences.yearsOfExperienceNumber?.toString() || '');
+    setSalaryMin(currentPreferences.desiredSalaryMin?.toString() || '');
+    setSalaryMax(currentPreferences.desiredSalaryMax?.toString() || '');
+    setSecurityClearance(currentPreferences.securityClearance || 'None');
   }, [currentPreferences]);
 
   const selectedJobTitles = Array.isArray(prefs.jobTitle) ? prefs.jobTitle : [prefs.jobTitle].filter(Boolean);
@@ -137,7 +163,11 @@ const PreferencesModal: React.FC<PreferencesModalProps> = ({ currentPreferences,
     const updatedPrefs: UserPreferences = {
       ...prefs,
       jobTitle: selectedJobTitles,
-      location: selectedLocations
+      location: selectedLocations,
+      yearsOfExperienceNumber: yearsOfExperienceNumber ? parseInt(yearsOfExperienceNumber) : undefined,
+      desiredSalaryMin: salaryMin ? parseInt(salaryMin) : undefined,
+      desiredSalaryMax: salaryMax ? parseInt(salaryMax) : undefined,
+      securityClearance: securityClearance
     };
     
     console.log('💾 Saving preferences:', updatedPrefs);
@@ -360,6 +390,78 @@ const PreferencesModal: React.FC<PreferencesModalProps> = ({ currentPreferences,
                   </button>
                 ))}
               </div>
+            </div>
+          </div>
+
+          {/* Years of Experience & Desired Salary Range Row */}
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-8 pt-4">
+            <div className="space-y-3">
+              <label className="text-xs font-black text-slate-400 uppercase tracking-widest ml-1">
+                Years of Experience (Number)
+              </label>
+              <input
+                type="number"
+                min="0"
+                max="50"
+                value={yearsOfExperienceNumber}
+                onChange={(e) => setYearsOfExperienceNumber(e.target.value)}
+                className="w-full bg-slate-50 border border-slate-100 rounded-2xl py-4 px-6 text-slate-900 font-bold placeholder:text-slate-300 focus:bg-white focus:ring-2 focus:ring-indigo-100 focus:border-indigo-600 outline-none transition-all"
+                placeholder="e.g. 5"
+              />
+            </div>
+
+            <div className="space-y-3">
+                <label className="text-xs font-black text-slate-400 uppercase tracking-widest ml-1">
+                  Desired Salary Range (USD) <span className="text-rose-500">*</span>
+                </label>
+              <div className="grid grid-cols-2 gap-2">
+                <div>
+                  <div className="relative">
+                    <span className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400 font-bold text-sm">$</span>
+                    <input
+                      type="number"
+                      min="0"
+                      value={salaryMin}
+                      onChange={(e) => setSalaryMin(e.target.value)}
+                      className="w-full bg-slate-50 border border-slate-100 rounded-xl py-3 pl-8 pr-3 text-slate-900 font-bold placeholder:text-slate-300 focus:bg-white focus:ring-2 focus:ring-indigo-100 focus:border-indigo-600 outline-none transition-all text-sm"
+                      placeholder="Min"
+                    />
+                  </div>
+                </div>
+                <div>
+                  <div className="relative">
+                    <span className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400 font-bold text-sm">$</span>
+                    <input
+                      type="number"
+                      min="0"
+                      value={salaryMax}
+                      onChange={(e) => setSalaryMax(e.target.value)}
+                      className="w-full bg-slate-50 border border-slate-100 rounded-xl py-3 pl-8 pr-3 text-slate-900 font-bold placeholder:text-slate-300 focus:bg-white focus:ring-2 focus:ring-indigo-100 focus:border-indigo-600 outline-none transition-all text-sm"
+                      placeholder="Max"
+                    />
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          {/* Security Clearance Row */}
+          <div className="pt-4">
+            <div className="space-y-3">
+              <label className="text-xs font-black text-slate-400 uppercase tracking-widest ml-1">
+                Security Clearance
+              </label>
+              <select
+                value={securityClearance}
+                onChange={(e) => setSecurityClearance(e.target.value as UserPreferences['securityClearance'])}
+                className="w-full bg-slate-50 border border-slate-100 rounded-2xl py-4 px-6 text-slate-900 font-bold focus:bg-white focus:ring-2 focus:ring-indigo-100 focus:border-indigo-600 outline-none transition-all"
+              >
+                {securityClearanceOptions.map((option) => (
+                  <option key={option} value={option}>
+                    {option}
+                  </option>
+                ))}
+              </select>
             </div>
           </div>
 
