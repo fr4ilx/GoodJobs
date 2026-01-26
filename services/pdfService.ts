@@ -65,9 +65,17 @@ export async function extractTextFromPDF(pdfUrl: string): Promise<{ text: string
               getBytes(storageRef),
               timeoutPromise
             ]);
-            
-            arrayBuffer = bytes.buffer;
-            console.log(`✅ Successfully fetched PDF via getBytes (${bytes.length} bytes)`);
+
+            // Firebase getBytes() may return either Uint8Array or ArrayBuffer depending on SDK typings/version.
+            if (bytes instanceof ArrayBuffer) {
+              arrayBuffer = bytes;
+              console.log(`✅ Successfully fetched PDF via getBytes (${bytes.byteLength} bytes)`);
+            } else {
+              const u8 = bytes as Uint8Array;
+              // Ensure we get a plain ArrayBuffer (not SharedArrayBuffer)
+              arrayBuffer = u8.slice().buffer;
+              console.log(`✅ Successfully fetched PDF via getBytes (${u8.byteLength} bytes)`);
+            }
           } catch (bytesError: any) {
             // If it's a retry limit error, wait a bit and try once more
             if (bytesError?.code === 'storage/retry-limit-exceeded' || bytesError?.message?.includes('retry')) {
@@ -77,8 +85,15 @@ export async function extractTextFromPDF(pdfUrl: string): Promise<{ text: string
               try {
                 const storageRef = ref(storage, storagePath);
                 const bytes = await getBytes(storageRef);
-                arrayBuffer = bytes.buffer;
-                console.log(`✅ Successfully fetched PDF via getBytes on retry (${bytes.length} bytes)`);
+                if (bytes instanceof ArrayBuffer) {
+                  arrayBuffer = bytes;
+                  console.log(`✅ Successfully fetched PDF via getBytes on retry (${bytes.byteLength} bytes)`);
+                } else {
+                  const u8 = bytes as Uint8Array;
+                  // Ensure we get a plain ArrayBuffer (not SharedArrayBuffer)
+                  arrayBuffer = u8.slice().buffer;
+                  console.log(`✅ Successfully fetched PDF via getBytes on retry (${u8.byteLength} bytes)`);
+                }
               } catch (retryError) {
                 console.error('All Firebase Storage methods failed:', retryError);
                 throw retryError;

@@ -112,7 +112,8 @@ const VisualizeSkillsPage: React.FC<VisualizeSkillsPageProps> = ({ data, resumeF
   };
 
   // Helper to get file name and URL from a source name
-  const getSourceInfo = (sourceName: string): { name: string; url: string } | null => {
+  // Always returns a usable {name,url} (falls back to sourceName).
+  const getSourceInfo = (sourceName: string): { name: string; url: string } => {
     // Try to match with resume files
     for (const file of resumeFiles) {
       if (file.url === sourceName || sourceName.includes(file.url) || file.url.includes(sourceName)) {

@@ -223,7 +223,11 @@ Return ONLY valid JSON matching the exact schema provided.`;
     }
   }
   const hasMultipleGitHubLinks = githubLinkCount > 2;
-  const shouldUseChunking = fullPromptLength > MAX_PROMPT_LENGTH || hasMultipleGitHubLinks;
+  // IMPORTANT: If the user uploaded resume/project files, Gemini cannot fetch Firebase URLs itself.
+  // We must use the chunking path so we can extract file text client-side (via `extractTextFromPDF`)
+  // and pass the extracted text into Gemini.
+  const hasAnyFileURLs = resumeFileURLs.length > 0 || projectFileURLs.length > 0;
+  const shouldUseChunking = fullPromptLength > MAX_PROMPT_LENGTH || hasMultipleGitHubLinks || hasAnyFileURLs;
   
   console.log(`📏 Prompt analysis:`, {
     length: fullPromptLength,
@@ -231,7 +235,11 @@ Return ONLY valid JSON matching the exact schema provided.`;
     githubLinks: githubLinkCount,
     shouldChunk: shouldUseChunking,
     reason: shouldUseChunking 
-      ? (fullPromptLength > MAX_PROMPT_LENGTH ? 'prompt too long' : 'multiple GitHub links')
+      ? (fullPromptLength > MAX_PROMPT_LENGTH
+          ? 'prompt too long'
+          : hasMultipleGitHubLinks
+            ? 'multiple GitHub links'
+            : 'file URLs require client-side extraction')
       : 'within limits'
   });
 
@@ -567,7 +575,12 @@ Return ONLY valid JSON matching the exact schema provided.`;
             },
             skill_aliases_map: {
               type: Type.OBJECT,
-              properties: {},
+              // Gemini structured output rejects OBJECT schemas with empty `properties`.
+              // We keep this as a dynamic map (raw mention -> canonical) via `additionalProperties`,
+              // but include a placeholder property to satisfy the validator.
+              properties: {
+                _placeholder: { type: Type.STRING, description: "Placeholder - actual keys are dynamic" }
+              },
               additionalProperties: { type: Type.STRING }
             },
             professional_experiences: {
