@@ -519,46 +519,114 @@ const VisualizeSkillsPage: React.FC<VisualizeSkillsPageProps> = ({ data, resumeF
     }));
   };
 
-  const renderSkills = (skills: Array<{ skill: string; evidence: string[] }>, expId?: string, category?: 'hard_skills' | 'soft_skills') => {
+  const renderSkills = (skills: Array<{ skill: string; evidence: string[] }>, skillGraph?: { clusters: Array<{ cluster_name: string; skills: string[] }> }, expId?: string, category?: 'hard_skills' | 'soft_skills') => {
+    // Create a map of skill name to skill data with evidence and original index
+    const skillMap = new Map<string, Array<{ skill: string; evidence: string[]; index: number }>>();
+    skills.forEach((skill, idx) => {
+      const key = skill.skill.toLowerCase();
+      if (!skillMap.has(key)) {
+        skillMap.set(key, []);
+      }
+      skillMap.get(key)!.push({ ...skill, index: idx });
+    });
+
+    // Group skills by clusters
+    const clusteredSkills: Array<{ clusterName: string; skills: Array<{ skill: string; evidence: string[]; index: number }> }> = [];
+    const usedSkills = new Set<string>();
+
+    if (skillGraph && skillGraph.clusters) {
+      skillGraph.clusters.forEach(cluster => {
+        const clusterSkills: Array<{ skill: string; evidence: string[]; index: number }> = [];
+        cluster.skills.forEach(skillName => {
+          const skillDataArray = skillMap.get(skillName.toLowerCase());
+          if (skillDataArray && skillDataArray.length > 0) {
+            // Use the first match (or could use all if duplicates exist)
+            const skillData = skillDataArray[0];
+            clusterSkills.push(skillData);
+            usedSkills.add(skillData.skill.toLowerCase());
+          }
+        });
+        if (clusterSkills.length > 0) {
+          clusteredSkills.push({
+            clusterName: cluster.cluster_name,
+            skills: clusterSkills
+          });
+        }
+      });
+    }
+
+    // Add unclustered skills to "Other" section
+    const unclusteredSkills: Array<{ skill: string; evidence: string[]; index: number }> = [];
+    skills.forEach((skill, idx) => {
+      if (!usedSkills.has(skill.skill.toLowerCase())) {
+        unclusteredSkills.push({ ...skill, index: idx });
+      }
+    });
+
+    if (unclusteredSkills.length > 0) {
+      clusteredSkills.push({
+        clusterName: 'Other Skills',
+        skills: unclusteredSkills
+      });
+    }
+
+    // If no clusters exist, show all skills in one group
+    if (clusteredSkills.length === 0) {
+      clusteredSkills.push({
+        clusterName: 'All Skills',
+        skills: skills.map((skill, idx) => ({ ...skill, index: idx }))
+      });
+    }
+
     return (
-      <div className="flex flex-wrap gap-2">
-        {skills.map((item, idx) => (
-          <div 
-            key={idx} 
-            className="relative group inline-flex items-center gap-1"
-          >
-            <span
-              className="px-3 py-1.5 bg-indigo-50 text-indigo-700 rounded-lg text-xs font-bold border border-indigo-200 cursor-pointer hover:bg-indigo-100 hover:border-indigo-300 transition-colors"
-              onMouseEnter={(e) => {
-                const rect = e.currentTarget.getBoundingClientRect();
-                setHoveredSkill({
-                  skill: item.skill,
-                  evidence: item.evidence,
-                  x: rect.left + rect.width / 2,
-                  y: rect.top
-                });
-              }}
-              onMouseLeave={() => setHoveredSkill(null)}
-            >
-              {item.skill}
-            </span>
-            {expId && category && (
-              <button
-                onClick={() => {
-                  // Check if it's a project or experience by checking if it exists in projects
-                  const isProject = editableData.projects.some(p => p.id === expId);
-                  if (isProject) {
-                    deleteProjectSkill(expId, category, idx);
-                  } else {
-                    deleteSkill(expId, category, idx);
-                  }
-                }}
-                className="opacity-0 group-hover:opacity-100 transition-opacity text-rose-500 hover:text-rose-700 -ml-1"
-                title="Delete skill"
-              >
-                <i className="fa-solid fa-times-circle text-sm"></i>
-              </button>
-            )}
+      <div className="space-y-4">
+        {clusteredSkills.map((cluster, clusterIdx) => (
+          <div key={clusterIdx} className="space-y-2">
+            <h5 className="text-xs font-black text-slate-400 uppercase tracking-widest">{cluster.clusterName}</h5>
+            <div className="flex flex-wrap gap-2">
+              {cluster.skills.map((item, itemIdx) => {
+                const originalIdx = item.index;
+                return (
+                  <div 
+                    key={`${clusterIdx}-${itemIdx}-${originalIdx}`} 
+                    className="relative group inline-flex items-center gap-1"
+                  >
+                    <span
+                      className="px-3 py-1.5 bg-indigo-50 text-indigo-700 rounded-lg text-xs font-bold border border-indigo-200 cursor-pointer hover:bg-indigo-100 hover:border-indigo-300 transition-colors"
+                      onMouseEnter={(e) => {
+                        const rect = e.currentTarget.getBoundingClientRect();
+                        setHoveredSkill({
+                          skill: item.skill,
+                          evidence: item.evidence,
+                          x: rect.left + rect.width / 2,
+                          y: rect.top
+                        });
+                      }}
+                      onMouseLeave={() => setHoveredSkill(null)}
+                    >
+                      {item.skill}
+                    </span>
+                    {expId && category && (
+                      <button
+                        onClick={() => {
+                          // Check if it's a project or experience by checking if it exists in projects
+                          const isProject = editableData.projects.some(p => p.id === expId);
+                          if (isProject) {
+                            deleteProjectSkill(expId, category, originalIdx);
+                          } else {
+                            deleteSkill(expId, category, originalIdx);
+                          }
+                        }}
+                        className="opacity-0 group-hover:opacity-100 transition-opacity text-rose-500 hover:text-rose-700 -ml-1"
+                        title="Delete skill"
+                      >
+                        <i className="fa-solid fa-times-circle text-sm"></i>
+                      </button>
+                    )}
+                  </div>
+                );
+              })}
+            </div>
           </div>
         ))}
       </div>
@@ -793,7 +861,7 @@ const VisualizeSkillsPage: React.FC<VisualizeSkillsPageProps> = ({ data, resumeF
                             <i className="fa-solid fa-plus"></i> Add
                           </button>
                         </div>
-                        {exp.hard_skills.length > 0 && renderSkills(exp.hard_skills, exp.id, 'hard_skills')}
+                        {exp.hard_skills.length > 0 && renderSkills(exp.hard_skills, exp.skill_graph, exp.id, 'hard_skills')}
                       </div>
                       <div>
                         <div className="flex items-center justify-between mb-2">
@@ -808,7 +876,7 @@ const VisualizeSkillsPage: React.FC<VisualizeSkillsPageProps> = ({ data, resumeF
                             <i className="fa-solid fa-plus"></i> Add
                           </button>
                         </div>
-                        {exp.soft_skills.length > 0 && renderSkills(exp.soft_skills, exp.id, 'soft_skills')}
+                        {exp.soft_skills.length > 0 && renderSkills(exp.soft_skills, exp.skill_graph, exp.id, 'soft_skills')}
                       </div>
                     </div>
                   </div>
@@ -1019,7 +1087,7 @@ const VisualizeSkillsPage: React.FC<VisualizeSkillsPageProps> = ({ data, resumeF
                             <i className="fa-solid fa-plus"></i> Add
                           </button>
                         </div>
-                        {project.hard_skills.length > 0 && renderSkills(project.hard_skills, project.id, 'hard_skills')}
+                        {project.hard_skills.length > 0 && renderSkills(project.hard_skills, project.skill_graph, project.id, 'hard_skills')}
                       </div>
                       <div>
                         <div className="flex items-center justify-between mb-2">
@@ -1034,7 +1102,7 @@ const VisualizeSkillsPage: React.FC<VisualizeSkillsPageProps> = ({ data, resumeF
                             <i className="fa-solid fa-plus"></i> Add
                           </button>
                         </div>
-                        {project.soft_skills.length > 0 && renderSkills(project.soft_skills, project.id, 'soft_skills')}
+                        {project.soft_skills.length > 0 && renderSkills(project.soft_skills, project.skill_graph, project.id, 'soft_skills')}
                       </div>
                     </div>
                   </div>
