@@ -11,6 +11,8 @@ interface SidebarProps {
 const Sidebar: React.FC<SidebarProps> = ({ activeItem, onNavigate, onSignOut }) => {
   const items: Array<{ name: NavItem; icon: string; displayName: string }> = [
     { name: NavItem.Jobs, icon: 'fa-briefcase', displayName: 'Jobs' },
+    { name: NavItem.Track, icon: 'fa-list-check', displayName: 'Track & Connect' },
+    { name: NavItem.Connect, icon: 'fa-comments', displayName: 'Connect' },
     { name: NavItem.Resume, icon: 'fa-file-lines', displayName: 'Resume & Projects' },
     { name: NavItem.VisualizeSkills, icon: 'fa-diagram-project', displayName: 'Visualize Skills' },
     { name: NavItem.Profile, icon: 'fa-circle-user', displayName: 'Profile' },

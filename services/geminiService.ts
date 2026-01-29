@@ -1,6 +1,6 @@
 
 import { GoogleGenAI, Type } from "@google/genai";
-import { SkillsVisualization } from "../types";
+import { SkillsVisualization, Recruiter } from "../types";
 import { fetchGitHubContent, parseGitHubUrl } from "./githubService";
 import { extractTextFromPDF } from "./pdfService";
 
@@ -1877,5 +1877,113 @@ export async function validateGeminiApiKey(): Promise<{ valid: boolean; error?: 
     } else {
       return { valid: false, error: `API validation failed: ${error?.message || 'Unknown error'}` };
     }
+  }
+}
+
+function getGeminiApiKey(): string {
+  const env = import.meta.env as any;
+  const apiKey = env.VITE_GEMINI_API_KEY || env.GEMINI_API_KEY || (process.env as any).API_KEY;
+  if (!apiKey) {
+    throw new Error('Gemini API key is not set. Add VITE_GEMINI_API_KEY to .env.local');
+  }
+  return apiKey;
+}
+
+/**
+ * Generates a job-tailored resume from master resume + job description.
+ */
+export async function generateCustomizedResume(
+  masterResume: string,
+  jobDescription: string
+): Promise<string> {
+  const apiKey = getGeminiApiKey();
+  const ai = new GoogleGenAI({ apiKey });
+  try {
+    const response = await ai.models.generateContent({
+      model: 'gemini-3-pro-preview',
+      contents: `Rewrite the following resume to be perfectly tailored for this job description.
+Focus on highlighting relevant skills and experiences found in the job description while maintaining the truth of the original resume.
+Format the output as clean, professional plain text with clear headings.
+
+Master Resume: ${masterResume}
+
+Job Description: ${jobDescription}`,
+    });
+    return response.text?.trim() || 'Failed to generate tailored resume.';
+  } catch (error) {
+    console.error('Tailoring Error:', error);
+    return 'Error generating customized resume. Please try again.';
+  }
+}
+
+/**
+ * Discovers recruiters/stakeholders for a company and role (Gemini-simulated).
+ */
+export async function findRecruiters(companyName: string, jobTitle: string): Promise<Recruiter[]> {
+  const apiKey = getGeminiApiKey();
+  const ai = new GoogleGenAI({ apiKey });
+  try {
+    const response = await ai.models.generateContent({
+      model: 'gemini-3-pro-preview',
+      contents: `Generate 3 realistic professional profiles for recruiters or engineering managers at ${companyName} who would be interested in a ${jobTitle}.
+Return a JSON array of objects with: name, role, email (simulated, e.g. firstname.lastname@company.com), relevance (why they are a good contact), and avatarSeed (short unique string for avatar).`,
+      config: {
+        responseMimeType: 'application/json',
+        responseSchema: {
+          type: Type.ARRAY,
+          items: {
+            type: Type.OBJECT,
+            properties: {
+              name: { type: Type.STRING },
+              role: { type: Type.STRING },
+              email: { type: Type.STRING },
+              relevance: { type: Type.STRING },
+              avatarSeed: { type: Type.STRING },
+            },
+            required: ['name', 'role', 'email', 'relevance', 'avatarSeed'],
+          },
+        },
+      },
+    });
+    const text = response.text?.trim() || '[]';
+    const results = JSON.parse(text) as { name: string; role: string; email: string; relevance: string; avatarSeed: string }[];
+    return results.map((r, i) => ({
+      id: `rec-${i}-${Date.now()}`,
+      name: r.name,
+      role: r.role,
+      email: r.email,
+      relevance: r.relevance,
+      avatar: `https://picsum.photos/seed/${r.avatarSeed}/200/200`,
+    }));
+  } catch (error) {
+    console.error('Discovery Error:', error);
+    return [];
+  }
+}
+
+/**
+ * Generates a personalized outreach email draft to a recruiter.
+ */
+export async function generateOutreachEmail(
+  userName: string,
+  resume: string,
+  jobTitle: string,
+  company: string,
+  recruiterName: string
+): Promise<string> {
+  const apiKey = getGeminiApiKey();
+  const ai = new GoogleGenAI({ apiKey });
+  try {
+    const response = await ai.models.generateContent({
+      model: 'gemini-3-pro-preview',
+      contents: `Write a high-converting, concise cold email from ${userName} to ${recruiterName} (at ${company}) regarding a ${jobTitle} position.
+Use the candidate's resume context to mention one specific value-add. Keep it under 150 words.
+
+Candidate Resume: ${resume}`,
+    });
+    return response.text?.trim() || 'Failed to generate draft.';
+  } catch (error) {
+    console.error('Drafting Error:', error);
+    return 'Error generating draft.';
   }
 }

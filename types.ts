@@ -27,6 +27,15 @@ export interface Job {
   jobUrl?: string;
 }
 
+export interface Recruiter {
+  id: string;
+  name: string;
+  role: string;
+  avatar: string;
+  email: string;
+  relevance: string;
+}
+
 export interface UserProfile {
   name: string;
   resumeContent: string;
@@ -43,6 +52,8 @@ export interface UserProfile {
 
 export enum NavItem {
   Jobs = 'Jobs',
+  Track = 'Track',
+  Connect = 'Connect',
   Resume = 'Resume',
   Profile = 'Profile',
   VisualizeSkills = 'Visualize Skills'

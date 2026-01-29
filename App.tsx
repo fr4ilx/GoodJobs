@@ -1,6 +1,6 @@
 
 import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react';
-import { Job, NavItem, UserProfile, UserPreferences, SkillsVisualization } from './types';
+import { Job, NavItem, UserProfile, UserPreferences, SkillsVisualization, Recruiter } from './types';
 import Sidebar from './components/Sidebar';
 import JobCard from './components/JobCard';
 import LandingPage from './components/LandingPage';
@@ -11,11 +11,30 @@ import ResumeUploadPage from './components/ResumeUploadPage';
 import JobDetailModal from './components/JobDetailModal';
 import PreferencesModal from './components/PreferencesModal';
 import VisualizeSkillsPage from './components/VisualizeSkillsPage';
-import { calculateMatchScore, analyzeSkills, validateGeminiApiKey } from './services/geminiService';
+import { calculateMatchScore, analyzeSkills, validateGeminiApiKey, generateCustomizedResume, findRecruiters, generateOutreachEmail } from './services/geminiService';
 import { useAuth } from './contexts/AuthContext';
 import { logOut } from './services/authService';
 import { saveUserPreferences, saveResumeData, saveUserProfile, getUserProfile, deleteResumeFile, deleteProjectFile, deleteProjectLink, FileMetadata, saveSkillsVisualization } from './services/firestoreService';
 import { fetchJobsWithFilters } from './services/apifyService';
+
+import { MOCK_JOBS } from './constants';
+
+type SortOption = 'score-desc' | 'score-asc' | 'newest';
+type TrackStatus = 'Customize' | 'Connect' | 'Apply' | 'Done';
+
+const TRACK_STORAGE_KEYS = {
+  TRACKED_JOBS: 'goodjobs_tracked_jobs_v1',
+  CUSTOM_RESUMES: 'goodjobs_custom_resumes_v1',
+  RECRUITERS: 'goodjobs_recruiters_v1',
+  DRAFTS: 'goodjobs_drafts_v1',
+};
+
+const STAGES: { label: string; key: TrackStatus; color: string; bg: string; icon: string; desc: string; accent: string }[] = [
+  { label: 'Customize', key: 'Customize', color: 'text-orange-600', bg: 'bg-orange-50', accent: 'bg-orange-500', icon: 'fa-pen-nib', desc: 'Tailor your resume and cover letter.' },
+  { label: 'Connect', key: 'Connect', color: 'text-emerald-600', bg: 'bg-emerald-50', accent: 'bg-emerald-500', icon: 'fa-comments', desc: 'Find and reach out to stakeholders.' },
+  { label: 'Apply', key: 'Apply', color: 'text-blue-600', bg: 'bg-blue-50', accent: 'bg-blue-500', icon: 'fa-paper-plane', desc: 'Submit application and track status.' },
+  { label: 'Done', key: 'Done', color: 'text-slate-600', bg: 'bg-slate-50', accent: 'bg-slate-800', icon: 'fa-circle-check', desc: 'Applications completed.' },
+];
 
 const App: React.FC = () => {
   const { currentUser } = useAuth();
@@ -32,6 +51,18 @@ const App: React.FC = () => {
   const [showPreferencesModal, setShowPreferencesModal] = useState(false);
   const [usePreferencesFilter] = useState(true);
   const [skillsVisualization, setSkillsVisualization] = useState<SkillsVisualization | null>(null);
+  const [sortBy, setSortBy] = useState<SortOption>('score-desc');
+  const [trackedJobs, setTrackedJobs] = useState<Record<string, TrackStatus>>({});
+  const [customizedResumes, setCustomizedResumes] = useState<Record<string, string>>({});
+  const [jobRecruiters, setJobRecruiters] = useState<Record<string, Recruiter[]>>({});
+  const [recruiterDrafts, setRecruiterDrafts] = useState<Record<string, string>>({});
+  const [activeTrackStage, setActiveTrackStage] = useState<TrackStatus | null>(null);
+  const [customizingJob, setCustomizingJob] = useState<Job | null>(null);
+  const [connectingJob, setConnectingJob] = useState<Job | null>(null);
+  const [viewingDraft, setViewingDraft] = useState<{ recruiter: Recruiter; draft: string } | null>(null);
+  const [isTailoring, setIsTailoring] = useState(false);
+  const [isDiscovering, setIsDiscovering] = useState(false);
+  const [isDrafting, setIsDrafting] = useState<string | null>(null);
   const [isAnalyzingSkills, setIsAnalyzingSkills] = useState(false);
   const [isValidatingApiKey, setIsValidatingApiKey] = useState(false);
   const [apiKeyValidationResult, setApiKeyValidationResult] = useState<{ valid: boolean; error?: string } | null>(null); 
@@ -162,21 +193,24 @@ const App: React.FC = () => {
 
       try {
         setJobsLoading(true);
-        setJobsLoadingStatus('Preparing to fetch jobs...');
+        setJobsLoadingStatus('Loading test jobs...');
 
-        const fetchedJobs = await fetchJobsWithFilters(
-          {
-            jobTitle: userProfile.preferences?.jobTitle,
-            location: userProfile.preferences?.location,
-            workType: userProfile.preferences?.workType,
-            yearsOfExperience: userProfile.preferences?.yearsOfExperience,
-            contractType: userProfile.preferences?.contractType
-          },
-          (status) => setJobsLoadingStatus(status)
-        );
-
-        setJobs(fetchedJobs);
+        // Use MOCK_JOBS for testing
+        setJobs(MOCK_JOBS);
         setJobsLoadingStatus('');
+
+        // Uncomment below to use real Apify jobs instead:
+        // const fetchedJobs = await fetchJobsWithFilters(
+        //   {
+        //     jobTitle: userProfile.preferences?.jobTitle,
+        //     location: userProfile.preferences?.location,
+        //     workType: userProfile.preferences?.workType,
+        //     yearsOfExperience: userProfile.preferences?.yearsOfExperience,
+        //     contractType: userProfile.preferences?.contractType
+        //   },
+        //   (status) => setJobsLoadingStatus(status)
+        // );
+        // setJobs(fetchedJobs);
       } catch (error) {
         console.error('Error loading jobs from Apify:', error);
         const errorMessage = error instanceof Error ? error.message : 'Failed to load jobs';
@@ -200,6 +234,33 @@ const App: React.FC = () => {
 
     loadJobs();
   }, [currentUser, isPreferencesComplete, isResumeComplete, userProfile.preferences]);
+
+  const trackStoragePrefix = () => `goodjobs_track_${currentUser?.uid || 'anon'}_`;
+  useEffect(() => {
+    if (!currentUser) return;
+    const prefix = trackStoragePrefix();
+    try {
+      const t = localStorage.getItem(prefix + 'tracked');
+      const r = localStorage.getItem(prefix + 'resumes');
+      const rec = localStorage.getItem(prefix + 'recruiters');
+      const d = localStorage.getItem(prefix + 'drafts');
+      if (t) setTrackedJobs(JSON.parse(t));
+      if (r) setCustomizedResumes(JSON.parse(r));
+      if (rec) setJobRecruiters(JSON.parse(rec));
+      if (d) setRecruiterDrafts(JSON.parse(d));
+    } catch (_) {}
+  }, [currentUser?.uid]);
+
+  useEffect(() => {
+    if (!currentUser) return;
+    const prefix = trackStoragePrefix();
+    try {
+      localStorage.setItem(prefix + 'tracked', JSON.stringify(trackedJobs));
+      localStorage.setItem(prefix + 'resumes', JSON.stringify(customizedResumes));
+      localStorage.setItem(prefix + 'recruiters', JSON.stringify(jobRecruiters));
+      localStorage.setItem(prefix + 'drafts', JSON.stringify(recruiterDrafts));
+    } catch (_) {}
+  }, [trackedJobs, customizedResumes, jobRecruiters, recruiterDrafts, currentUser?.uid]);
 
   const handleStart = (mode: 'login' | 'signup') => {
     setAuthMode(mode);
@@ -452,37 +513,30 @@ const App: React.FC = () => {
       // Clear existing jobs to show loading state
       setJobs([]);
       
-      // ALWAYS reload jobs with new preferences - this triggers a NEW API request
-      console.log('📡 Starting API call with updated preferences:', {
-        jobTitle: newPrefs.jobTitle,
-        location: newPrefs.location,
-        workType: newPrefs.workType,
-        yearsOfExperience: newPrefs.yearsOfExperience,
-        contractType: newPrefs.contractType
-      });
-      
+      // Use MOCK_JOBS for testing
       setJobsLoading(true);
-      setJobsLoadingStatus('Fetching jobs with updated preferences...');
+      setJobsLoadingStatus('Loading test jobs...');
       
       try {
-        const fetchedJobs = await fetchJobsWithFilters(
-          {
-            jobTitle: newPrefs.jobTitle,
-            location: newPrefs.location,
-            workType: newPrefs.workType,
-            yearsOfExperience: newPrefs.yearsOfExperience,
-            contractType: newPrefs.contractType
-          },
-          (status) => {
-            console.log('📊 Progress update:', status);
-            setJobsLoadingStatus(status);
-          }
-        );
-        
-        console.log(`✅ Successfully fetched ${fetchedJobs.length} jobs with new preferences`);
-        console.log('📋 Jobs being set to state:', fetchedJobs.map(j => ({ id: j.id, title: j.title, company: j.company })));
-        setJobs(fetchedJobs);
+        // Use MOCK_JOBS for testing
+        setJobs(MOCK_JOBS);
         setJobsLoadingStatus('');
+        
+        // Uncomment below to use real Apify jobs instead:
+        // const fetchedJobs = await fetchJobsWithFilters(
+        //   {
+        //     jobTitle: newPrefs.jobTitle,
+        //     location: newPrefs.location,
+        //     workType: newPrefs.workType,
+        //     yearsOfExperience: newPrefs.yearsOfExperience,
+        //     contractType: newPrefs.contractType
+        //   },
+        //   (status) => {
+        //     console.log('📊 Progress update:', status);
+        //     setJobsLoadingStatus(status);
+        //   }
+        // );
+        // setJobs(fetchedJobs);
       } catch (error) {
         console.error('❌ Error reloading jobs:', error);
         const errorMessage = error instanceof Error ? error.message : 'Failed to reload jobs';
@@ -546,7 +600,70 @@ const App: React.FC = () => {
     return jobs;
   }, [jobs]);
 
+  const sortedJobs = useMemo(() => {
+    return [...filteredJobs].sort((a, b) => {
+      if (sortBy === 'score-desc') return (b.matchScore ?? 0) - (a.matchScore ?? 0);
+      if (sortBy === 'score-asc') return (a.matchScore ?? 0) - (b.matchScore ?? 0);
+      return parseInt(b.id, 10) - parseInt(a.id, 10);
+    });
+  }, [filteredJobs, sortBy]);
+
   const isMatching = analysisProgress !== null;
+
+  const trackJob = (id: string) => {
+    if (!trackedJobs[id]) setTrackedJobs((prev) => ({ ...prev, [id]: 'Customize' }));
+  };
+  const moveJob = (id: string, status: TrackStatus) => {
+    setTrackedJobs((prev) => ({ ...prev, [id]: status }));
+  };
+  const untrackJob = (id: string) => {
+    setTrackedJobs((prev) => {
+      const next = { ...prev };
+      delete next[id];
+      return next;
+    });
+  };
+  const handleTailor = async (job: Job) => {
+    if (!userProfile.resumeContent) return;
+    setIsTailoring(true);
+    try {
+      const tailored = await generateCustomizedResume(userProfile.resumeContent, job.description);
+      setCustomizedResumes((prev) => ({ ...prev, [job.id]: tailored }));
+    } finally {
+      setIsTailoring(false);
+    }
+  };
+  const handleDiscoverRecruiters = async (job: Job) => {
+    setIsDiscovering(true);
+    try {
+      const found = await findRecruiters(job.company, job.title);
+      setJobRecruiters((prev) => ({ ...prev, [job.id]: found }));
+    } finally {
+      setIsDiscovering(false);
+    }
+  };
+  const handleDraftEmail = async (job: Job, recruiter: Recruiter) => {
+    setIsDrafting(recruiter.id);
+    try {
+      const draft = await generateOutreachEmail(
+        userProfile.name,
+        userProfile.resumeContent || '',
+        job.title,
+        job.company,
+        recruiter.name
+      );
+      setRecruiterDrafts((prev) => ({ ...prev, [recruiter.id]: draft }));
+      setViewingDraft({ recruiter, draft });
+    } finally {
+      setIsDrafting(null);
+    }
+  };
+  const allRecruiters = useMemo(() => {
+    return Object.entries(jobRecruiters).flatMap(([jobId, recs]) => {
+      const job = jobs.find((j) => j.id === jobId);
+      return recs.map((r) => ({ ...r, jobCompany: job?.company, jobTitle: job?.title }));
+    });
+  }, [jobRecruiters, jobs]);
 
   // Resume section handlers
   const handleResumeDrop = (e: React.DragEvent) => {
@@ -801,71 +918,51 @@ const App: React.FC = () => {
     );
   }
 
+  const handleNavigate = (nav: NavItem) => {
+    setActiveTrackStage(null);
+    if (nav !== NavItem.Track) {
+      setCustomizingJob(null);
+      setConnectingJob(null);
+      setViewingDraft(null);
+    }
+    setActiveNav(nav);
+  };
+
   return (
     <div className="min-h-screen bg-[#f8f9fe] animate-in fade-in duration-1000">
-      <Sidebar activeItem={activeNav} onNavigate={setActiveNav} onSignOut={handleSignOut} />
+      <Sidebar activeItem={activeNav} onNavigate={handleNavigate} onSignOut={handleSignOut} />
 
       <main className="ml-64 p-12 max-w-7xl mx-auto">
         {activeNav === NavItem.Jobs && (
-          <section className="animate-in fade-in slide-in-from-bottom-4 duration-500">
-            <header className="mb-10">
+          <section className="animate-in fade-in slide-in-from-bottom-4 duration-500 max-w-7xl mx-auto">
+            <header className="mb-12">
               <div className="flex items-center justify-between mb-8 border-b border-slate-100 pb-8">
                 <div>
-                  <p className="text-slate-400 font-medium mb-1 text-sm tracking-wide">AI-CURATED FEED</p>
-                  <h1 className="text-4xl font-extrabold text-[#1a1a3a] tracking-tight">Personalized for You</h1>
+                  <p className="text-slate-400 font-bold mb-1 text-xs uppercase tracking-[0.3em]">AI Intelligence Feed</p>
+                  <h1 className="text-4xl font-black text-[#1a1a3a] tracking-tight">Personalized Recommendations</h1>
                 </div>
-                
                 <div className="flex items-center gap-3">
-                   <div className="text-right">
-                      <p className="text-[10px] font-black text-slate-300 uppercase tracking-widest">Matching Identity</p>
-                      <p className="text-sm font-bold text-indigo-600">{userProfile.name}</p>
-                   </div>
-                   <div className="w-12 h-12 bg-indigo-50 rounded-2xl flex items-center justify-center text-indigo-600">
-                      <i className="fa-solid fa-user-gear"></i>
-                   </div>
+                  <div className="text-right">
+                    <p className="text-[10px] font-black text-slate-300 uppercase tracking-widest">Active Identity</p>
+                    <p className="text-sm font-bold text-indigo-600">{userProfile.name}</p>
+                  </div>
+                  <div className="w-12 h-12 bg-white border border-slate-100 rounded-2xl flex items-center justify-center text-indigo-600 shadow-sm">
+                    <i className="fa-solid fa-bolt-lightning"></i>
+                  </div>
                 </div>
               </div>
-
-              {/* Preferences Summary */}
-              {userProfile.preferences && (() => {
-                const jobTitles = Array.isArray(userProfile.preferences.jobTitle) 
-                  ? userProfile.preferences.jobTitle 
-                  : [userProfile.preferences.jobTitle].filter(Boolean);
-                const locations = Array.isArray(userProfile.preferences.location) 
-                  ? userProfile.preferences.location 
-                  : [userProfile.preferences.location].filter(Boolean);
-                
-                return (
-                  <div className="flex flex-wrap items-center gap-3 animate-in fade-in slide-in-from-left-4 duration-700">
-                    {jobTitles.map((title, idx) => (
-                      <div key={idx} className="flex items-center gap-2 bg-white px-4 py-2.5 rounded-2xl text-xs font-bold border border-slate-100 shadow-sm text-slate-600">
-                        <i className="fa-solid fa-briefcase text-indigo-500"></i>
-                        {title}
-                      </div>
-                    ))}
-                    {locations.map((location, idx) => (
-                      <div key={idx} className="flex items-center gap-2 bg-white px-4 py-2.5 rounded-2xl text-xs font-bold border border-slate-100 shadow-sm text-slate-600">
-                        <i className="fa-solid fa-location-dot text-purple-500"></i>
-                        {location}
-                      </div>
-                    ))}
-                    <div className="flex items-center gap-2 bg-white px-4 py-2.5 rounded-2xl text-xs font-bold border border-slate-100 shadow-sm text-slate-600">
-                      <i className="fa-solid fa-house-laptop text-emerald-500"></i>
-                      {userProfile.preferences.workType}
-                    </div>
-                    <div className="flex items-center gap-2 bg-white px-4 py-2.5 rounded-2xl text-xs font-bold border border-slate-100 shadow-sm text-slate-600">
-                      <i className="fa-solid fa-calendar-check text-teal-500"></i>
-                      {userProfile.preferences.yearsOfExperience}
-                    </div>
-                    {userProfile.preferences.requiresSponsorship && (
-                      <div className="flex items-center gap-2 bg-rose-50 text-rose-600 px-4 py-2.5 rounded-2xl text-xs font-bold border border-rose-100/50 shadow-sm">
-                        <i className="fa-solid fa-passport opacity-70"></i>
-                        Visa Support Required
-                      </div>
-                    )}
-                  </div>
-                );
-              })()}
+              <div className="flex items-center gap-3 bg-white border border-slate-100 px-5 py-3 rounded-2xl shadow-sm w-fit">
+                <i className="fa-solid fa-arrow-down-short-wide text-slate-400 text-xs"></i>
+                <select
+                  value={sortBy}
+                  onChange={(e) => setSortBy(e.target.value as SortOption)}
+                  className="text-xs font-black text-slate-600 bg-transparent border-none outline-none appearance-none cursor-pointer uppercase tracking-widest"
+                >
+                  <option value="score-desc">Best Match</option>
+                  <option value="score-asc">Lowest Match</option>
+                  <option value="newest">Recent</option>
+                </select>
+              </div>
             </header>
 
             <div className="relative">
@@ -882,11 +979,9 @@ const App: React.FC = () => {
               
               {isMatching && !jobsLoading && (
                 <div className="sticky top-0 mb-8 flex justify-center z-20">
-                  <div className="bg-indigo-600 text-white text-[11px] font-black px-8 py-3 rounded-full shadow-2xl shadow-indigo-200 flex items-center gap-3 animate-bounce">
-                    <i className="fa-solid fa-wand-magic-sparkles animate-pulse"></i>
-                    <span className="tracking-widest uppercase">
-                      Gemini Neural Matching {analysisProgress.current} / {analysisProgress.total}
-                    </span>
+                  <div className="bg-indigo-600 text-white text-[10px] font-black px-6 py-2.5 rounded-full shadow-2xl flex items-center gap-3 animate-bounce">
+                    <i className="fa-solid fa-dna animate-pulse"></i>
+                    <span className="tracking-widest uppercase">Analyzing DNA...</span>
                   </div>
                 </div>
               )}
@@ -900,9 +995,15 @@ const App: React.FC = () => {
                     <h3 className="text-xl font-bold text-slate-900 mb-2">Loading Jobs from LinkedIn</h3>
                     <p className="text-slate-400 font-medium max-w-xs mx-auto">{jobsLoadingStatus || 'Fetching latest job listings...'}</p>
                   </div>
-                ) : filteredJobs.length > 0 ? (
-                  filteredJobs.map(job => (
-                    <JobCard key={job.id} job={job} onClick={() => setSelectedJob(job)} />
+                ) : sortedJobs.length > 0 ? (
+                  sortedJobs.map((job) => (
+                    <JobCard
+                      key={job.id}
+                      job={job}
+                      onClick={() => setSelectedJob(job)}
+                      onTrack={() => trackJob(job.id)}
+                      isTracked={!!trackedJobs[job.id]}
+                    />
                   ))
                 ) : (
                   <div className="text-center py-32 bg-white rounded-[3rem] border-2 border-dashed border-slate-100">
@@ -914,6 +1015,384 @@ const App: React.FC = () => {
                   </div>
                 )}
               </div>
+            </div>
+          </section>
+        )}
+
+        {activeNav === NavItem.Track && (
+          <section className="animate-in fade-in duration-500 h-full">
+            {customizingJob ? (
+              <div className="animate-in slide-in-from-right-12 duration-500 h-[calc(100vh-100px)] flex flex-col">
+                <header className="flex items-center justify-between mb-8">
+                  <div className="flex items-center gap-4">
+                    <button onClick={() => setCustomizingJob(null)} className="w-10 h-10 bg-white border border-slate-200 rounded-xl flex items-center justify-center text-slate-400 hover:text-indigo-600 transition-all shadow-sm">
+                      <i className="fa-solid fa-arrow-left"></i>
+                    </button>
+                    <div>
+                      <h2 className="text-2xl font-black text-slate-900 leading-tight">Tailoring: {customizingJob.title}</h2>
+                      <p className="text-indigo-600 font-bold text-xs uppercase tracking-widest">{customizingJob.company}</p>
+                    </div>
+                  </div>
+                  <div className="flex gap-3">
+                    <button onClick={() => handleTailor(customizingJob)} disabled={isTailoring} className="bg-indigo-600 text-white px-6 py-3 rounded-xl font-black text-xs uppercase tracking-widest flex items-center gap-3 hover:bg-indigo-700 transition-all disabled:opacity-50 shadow-lg shadow-indigo-100">
+                      {isTailoring ? <i className="fa-solid fa-spinner animate-spin"></i> : <i className="fa-solid fa-wand-sparkles"></i>}
+                      Tailor Resume
+                    </button>
+                    <button onClick={() => { moveJob(customizingJob.id, 'Connect'); setCustomizingJob(null); }} className="bg-emerald-600 text-white px-6 py-3 rounded-xl font-black text-xs uppercase tracking-widest flex items-center gap-3 hover:bg-emerald-700 transition-all shadow-lg shadow-emerald-100">
+                      Finalize & Advance
+                      <i className="fa-solid fa-circle-check"></i>
+                    </button>
+                  </div>
+                </header>
+                <div className="flex-1 grid grid-cols-1 lg:grid-cols-3 gap-6 overflow-hidden pb-8">
+                  <div className="bg-white rounded-[2rem] p-8 shadow-sm border border-slate-100 flex flex-col overflow-hidden">
+                    <div className="p-5 border-b border-slate-50 bg-slate-50/50 flex items-center justify-between">
+                      <span className="text-[10px] font-black text-slate-400 uppercase tracking-widest">Requirements</span>
+                    </div>
+                    <div className="p-8 overflow-y-auto leading-relaxed text-slate-600 text-sm font-medium custom-scrollbar">{customizingJob.description}</div>
+                  </div>
+                  <div className="bg-white rounded-[2rem] p-8 shadow-sm border border-slate-100 flex flex-col overflow-hidden">
+                    <div className="p-5 border-b border-slate-50 bg-slate-50/50 flex items-center justify-between">
+                      <span className="text-[10px] font-black text-slate-400 uppercase tracking-widest">Master Resume</span>
+                    </div>
+                    <textarea readOnly value={userProfile.resumeContent || ''} className="p-8 flex-1 bg-transparent text-slate-500 text-sm font-medium leading-relaxed border-none outline-none resize-none overflow-y-auto custom-scrollbar" />
+                  </div>
+                  <div className="bg-slate-900 rounded-[2rem] shadow-2xl flex flex-col overflow-hidden">
+                    <div className="p-5 border-b border-white/5 bg-white/5 flex items-center justify-between">
+                      <span className="text-[10px] font-black text-white/40 uppercase tracking-widest">Tailored Resume</span>
+                    </div>
+                    {isTailoring ? (
+                      <div className="flex-1 flex flex-col items-center justify-center text-center text-white p-12">
+                        <div className="w-16 h-16 border-4 border-indigo-500/20 border-t-indigo-500 rounded-full animate-spin mb-6"></div>
+                        <h4 className="text-lg font-black mb-2">Re-Engineering...</h4>
+                      </div>
+                    ) : (
+                      <textarea value={customizedResumes[customizingJob.id] || "Click 'Tailor Resume' to generate a job-specific version."} onChange={(e) => setCustomizedResumes((prev) => ({ ...prev, [customizingJob.id]: e.target.value }))} className="p-8 flex-1 bg-transparent text-white/80 text-sm font-medium leading-relaxed border-none outline-none resize-none overflow-y-auto custom-dark-scrollbar" />
+                    )}
+                  </div>
+                </div>
+              </div>
+            ) : connectingJob ? (
+              <div className="animate-in slide-in-from-right-12 duration-500 max-w-7xl mx-auto h-[calc(100vh-100px)] flex flex-col">
+                <header className="flex items-center justify-between mb-8">
+                  <div className="flex items-center gap-4">
+                    <button onClick={() => setConnectingJob(null)} className="w-10 h-10 bg-white border border-slate-200 rounded-xl flex items-center justify-center text-slate-400 hover:text-indigo-600 transition-all shadow-sm">
+                      <i className="fa-solid fa-arrow-left"></i>
+                    </button>
+                    <div>
+                      <h2 className="text-2xl font-black text-slate-900 leading-tight">Stakeholder Radar: {connectingJob.company}</h2>
+                      <p className="text-emerald-600 font-bold text-xs uppercase tracking-widest">{connectingJob.title}</p>
+                    </div>
+                  </div>
+                  <div className="flex gap-3">
+                    <button onClick={() => handleDiscoverRecruiters(connectingJob)} disabled={isDiscovering} className="bg-emerald-600 text-white px-6 py-3 rounded-xl font-black text-xs uppercase tracking-widest flex items-center gap-3 hover:bg-emerald-700 transition-all disabled:opacity-50 shadow-lg shadow-emerald-100">
+                      {isDiscovering ? <i className="fa-solid fa-spinner animate-spin"></i> : <i className="fa-solid fa-users-viewfinder"></i>}
+                      Scan Stakeholders
+                    </button>
+                    <button onClick={() => { moveJob(connectingJob.id, 'Apply'); setConnectingJob(null); }} className="bg-slate-900 text-white px-6 py-3 rounded-xl font-black text-xs uppercase tracking-widest flex items-center gap-3 hover:bg-slate-800 transition-all shadow-xl">
+                      Move to Apply
+                      <i className="fa-solid fa-arrow-right"></i>
+                    </button>
+                  </div>
+                </header>
+                <div className="flex-1 grid grid-cols-1 lg:grid-cols-2 gap-8 overflow-hidden pb-8">
+                  <div className="space-y-4 overflow-y-auto pr-4 custom-scrollbar">
+                    {(jobRecruiters[connectingJob.id] || []).map((rec) => (
+                      <div key={rec.id} className="bg-white p-6 rounded-[2rem] border border-slate-100 shadow-sm flex items-center justify-between group hover:border-emerald-100 transition-all">
+                        <div className="flex items-center gap-5">
+                          <img src={rec.avatar} alt="" className="w-14 h-14 rounded-2xl object-cover shadow-sm border border-slate-100" />
+                          <div>
+                            <h4 className="font-black text-slate-900 leading-tight">{rec.name}</h4>
+                            <p className="text-xs font-bold text-emerald-600 mb-1">{rec.role}</p>
+                            <p className="text-[10px] text-slate-400 font-medium leading-tight max-w-[200px]">{rec.relevance}</p>
+                          </div>
+                        </div>
+                        <button onClick={() => handleDraftEmail(connectingJob, rec)} disabled={isDrafting === rec.id} className="flex-none bg-emerald-50 text-emerald-600 px-5 py-3 rounded-xl text-[10px] font-black uppercase tracking-widest hover:bg-emerald-600 hover:text-white transition-all disabled:opacity-50">
+                          {isDrafting === rec.id ? 'Thinking...' : (recruiterDrafts[rec.id] ? 'Review Draft' : 'Draft Email')}
+                        </button>
+                      </div>
+                    ))}
+                    {!(jobRecruiters[connectingJob.id] || []).length && !isDiscovering && (
+                      <div className="h-full flex flex-col items-center justify-center p-12 text-center border-4 border-dashed border-slate-100 rounded-[3rem] bg-white/50">
+                        <i className="fa-solid fa-satellite-dish text-4xl text-slate-200 mb-6"></i>
+                        <h4 className="text-xl font-black text-slate-300 tracking-tight">Radar Silent</h4>
+                        <p className="text-slate-400 font-bold mt-2">Run stakeholder discovery to find decision makers at this company.</p>
+                      </div>
+                    )}
+                    {isDiscovering && (
+                      <div className="space-y-4">
+                        {[1, 2, 3].map((i) => (
+                          <div key={i} className="bg-white p-6 rounded-[2rem] animate-pulse border border-slate-100 flex items-center gap-5">
+                            <div className="w-14 h-14 bg-slate-50 rounded-2xl"></div>
+                            <div className="flex-1 space-y-2">
+                              <div className="h-4 bg-slate-50 w-1/4 rounded"></div>
+                              <div className="h-3 bg-slate-50 w-1/3 rounded"></div>
+                              <div className="h-2 bg-slate-50 w-1/2 rounded"></div>
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                  <div className="bg-white rounded-[3rem] border border-slate-100 shadow-2xl flex flex-col overflow-hidden">
+                    <div className="p-6 border-b border-slate-50 flex items-center justify-between bg-slate-50/30">
+                      <span className="text-[10px] font-black text-slate-400 uppercase tracking-widest">Outreach Workbench</span>
+                      <i className="fa-solid fa-pen-nib text-emerald-400"></i>
+                    </div>
+                    {viewingDraft ? (
+                      <div className="flex-1 flex flex-col overflow-hidden p-8 animate-in fade-in zoom-in-95 duration-300">
+                        <div className="flex items-center gap-4 mb-6 pb-6 border-b border-slate-50">
+                          <img src={viewingDraft.recruiter.avatar} alt="" className="w-12 h-12 rounded-xl" />
+                          <div>
+                            <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest">Direct Contact</p>
+                            <p className="text-xs font-bold text-slate-900">{viewingDraft.recruiter.name} &lt;{viewingDraft.recruiter.email}&gt;</p>
+                          </div>
+                        </div>
+                        <div className="flex-1 bg-slate-50 p-8 rounded-3xl border border-slate-100 overflow-y-auto">
+                          <textarea value={viewingDraft.draft} onChange={(e) => setViewingDraft({ ...viewingDraft, draft: e.target.value })} className="w-full h-full bg-transparent text-sm font-medium leading-relaxed text-slate-600 border-none outline-none resize-none" />
+                        </div>
+                        <div className="mt-6 flex gap-3">
+                          <button className="flex-1 bg-emerald-600 text-white py-4 rounded-xl font-black text-xs uppercase tracking-widest shadow-lg shadow-emerald-100 hover:bg-emerald-700 transition-all flex items-center justify-center gap-2">
+                            <i className="fa-solid fa-paper-plane"></i>
+                            Send to Recruiter
+                          </button>
+                          <button onClick={() => setViewingDraft(null)} className="px-6 border border-slate-200 text-slate-400 rounded-xl font-black text-xs uppercase tracking-widest hover:bg-slate-50 transition-all">Dismiss</button>
+                        </div>
+                      </div>
+                    ) : (
+                      <div className="flex-1 flex flex-col items-center justify-center p-12 text-center">
+                        <div className="w-20 h-20 bg-slate-50 rounded-3xl flex items-center justify-center text-slate-200 mb-6 border border-slate-100">
+                          <i className="fa-solid fa-envelope-open-text text-2xl"></i>
+                        </div>
+                        <h4 className="text-lg font-black text-slate-300 tracking-tight">Workbench Empty</h4>
+                        <p className="text-slate-400 font-bold mt-2">Select a contact to generate or review a personalized outreach draft.</p>
+                      </div>
+                    )}
+                  </div>
+                </div>
+              </div>
+            ) : !activeTrackStage ? (
+              <>
+                <header className="mb-12">
+                  <p className="text-slate-400 font-bold mb-1 text-xs uppercase tracking-[0.3em]">Command Center</p>
+                  <h2 className="text-4xl font-black text-[#1a1a3a] tracking-tight leading-none">Your Application Pipeline</h2>
+                </header>
+                <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
+                  {STAGES.map((s) => (
+                    <button key={s.key} onClick={() => setActiveTrackStage(s.key)} className="group relative p-8 rounded-[2.5rem] text-left transition-all hover:scale-105 shadow-sm border border-slate-100 bg-white hover:shadow-2xl h-80 flex flex-col justify-between">
+                      <div className={`w-16 h-16 ${s.bg} ${s.color} rounded-2xl flex items-center justify-center text-2xl group-hover:scale-110 shadow-sm`}><i className={`fa-solid ${s.icon}`}></i></div>
+                      <div>
+                        <div className="flex items-end justify-between mb-2">
+                          <h3 className="text-3xl font-black text-slate-900 tracking-tight">{s.label}</h3>
+                          <span className="text-4xl font-black text-indigo-600/20 group-hover:text-indigo-600 transition-colors">{jobs.filter((j) => trackedJobs[j.id] === s.key).length}</span>
+                        </div>
+                        <p className="text-sm font-medium text-slate-400 leading-relaxed pr-4">{s.desc}</p>
+                      </div>
+                      <div className="absolute top-0 right-0 p-8 opacity-0 group-hover:opacity-100 transition-opacity"><i className="fa-solid fa-chevron-right text-indigo-400"></i></div>
+                    </button>
+                  ))}
+                </div>
+              </>
+            ) : activeTrackStage === 'Done' ? (
+              <div className="animate-in fade-in slide-in-from-right-12 duration-500 max-w-7xl mx-auto">
+                <button onClick={() => setActiveTrackStage(null)} className="mb-8 flex items-center gap-3 text-slate-400 hover:text-indigo-600 font-black text-xs uppercase tracking-widest transition-all group"><i className="fa-solid fa-arrow-left group-hover:-translate-x-1 transition-transform"></i>Back to Pipeline</button>
+                {(() => {
+                  const stageJobs = jobs.filter((j) => trackedJobs[j.id] === 'Done');
+                  return (
+                    <div className="space-y-8">
+                      <header className="flex items-center gap-6 mb-8">
+                        <div className="w-16 h-16 bg-slate-100 rounded-2xl flex items-center justify-center border border-slate-200">
+                          <i className="fa-solid fa-circle-check text-slate-600 text-2xl"></i>
+                        </div>
+                        <div>
+                          <h2 className="text-5xl font-black text-slate-900 tracking-tight leading-none mb-1">Neural Ledger</h2>
+                          <p className="text-slate-400 font-bold">{stageJobs.length} completed {stageJobs.length === 1 ? 'entry' : 'entries'}</p>
+                        </div>
+                      </header>
+                      
+                      <div className="bg-white rounded-[2rem] border border-slate-100 shadow-sm overflow-hidden">
+                        <div className="overflow-x-auto">
+                          <table className="w-full">
+                            <thead className="bg-slate-50 border-b border-slate-100">
+                              <tr>
+                                <th className="text-left py-4 px-6 text-[10px] font-black text-slate-400 uppercase tracking-widest">ROLE & COMPANY</th>
+                                <th className="text-left py-4 px-6 text-[10px] font-black text-slate-400 uppercase tracking-widest">CUSTOMIZATION</th>
+                                <th className="text-left py-4 px-6 text-[10px] font-black text-slate-400 uppercase tracking-widest">CONNECT (STAKEHOLDERS)</th>
+                                <th className="text-left py-4 px-6 text-[10px] font-black text-slate-400 uppercase tracking-widest">APPLY STATUS</th>
+                                <th className="text-left py-4 px-6 text-[10px] font-black text-slate-400 uppercase tracking-widest">DETAILS</th>
+                              </tr>
+                            </thead>
+                            <tbody className="divide-y divide-slate-50">
+                              {stageJobs.map((job) => {
+                                const hasCustomized = !!customizedResumes[job.id];
+                                const recruiters = jobRecruiters[job.id] || [];
+                                const hasRecruiters = recruiters.length > 0;
+                                return (
+                                  <tr key={job.id} className="hover:bg-slate-50/50 transition-colors">
+                                    <td className="py-5 px-6">
+                                      <div className="flex items-center gap-4">
+                                        <div className="w-12 h-12 rounded-xl bg-slate-50 border border-slate-100 flex items-center justify-center overflow-hidden">
+                                          {job.logo && job.logo.startsWith('http') ? (
+                                            <img src={job.logo} alt={job.company} className="w-full h-full object-cover" />
+                                          ) : (
+                                            <span className="text-slate-400 font-black text-lg">{job.company?.charAt(0) || '?'}</span>
+                                          )}
+                                        </div>
+                                        <div>
+                                          <p className="font-black text-slate-900 text-sm mb-0.5">{job.title}</p>
+                                          <p className="text-xs font-bold text-slate-400 uppercase tracking-wider">{job.company}</p>
+                                        </div>
+                                      </div>
+                                    </td>
+                                    <td className="py-5 px-6">
+                                      {hasCustomized ? (
+                                        <div className="w-8 h-8 bg-emerald-100 rounded-full flex items-center justify-center">
+                                          <i className="fa-solid fa-check text-emerald-600 text-xs"></i>
+                                        </div>
+                                      ) : (
+                                        <div className="w-8 h-8 bg-slate-100 rounded-full flex items-center justify-center">
+                                          <i className="fa-solid fa-minus text-slate-300 text-xs"></i>
+                                        </div>
+                                      )}
+                                    </td>
+                                    <td className="py-5 px-6">
+                                      {hasRecruiters ? (
+                                        <span className="text-xs font-bold text-slate-700">{recruiters.length} contact{recruiters.length !== 1 ? 's' : ''}</span>
+                                      ) : (
+                                        <span className="text-xs font-bold text-slate-300 uppercase">NO CONTACTS FOUND</span>
+                                      )}
+                                    </td>
+                                    <td className="py-5 px-6">
+                                      <span className="inline-block px-4 py-1.5 bg-rose-100 text-rose-700 rounded-full text-[10px] font-black uppercase tracking-wider">
+                                        NO (PENDING)
+                                      </span>
+                                    </td>
+                                    <td className="py-5 px-6">
+                                      <button
+                                        onClick={() => {
+                                          setSelectedJob(job);
+                                        }}
+                                        className="text-xs font-black uppercase tracking-widest text-indigo-600 hover:text-indigo-700 hover:underline transition-colors"
+                                      >
+                                        VIEW DETAILS
+                                      </button>
+                                    </td>
+                                  </tr>
+                                );
+                              })}
+                            </tbody>
+                          </table>
+                        </div>
+                        {stageJobs.length === 0 && (
+                          <div className="py-24 text-center border-t border-slate-100">
+                            <div className="w-20 h-20 bg-slate-50 rounded-full flex items-center justify-center text-slate-200 mx-auto mb-6">
+                              <i className="fa-solid fa-circle-check text-3xl"></i>
+                            </div>
+                            <h3 className="text-xl font-black text-slate-300 tracking-tight mb-2">No Completed Applications</h3>
+                            <p className="text-slate-400 font-bold">Move jobs to Done stage to see them in the Neural Ledger.</p>
+                          </div>
+                        )}
+                      </div>
+                    </div>
+                  );
+                })()}
+              </div>
+            ) : (
+              <div className="animate-in fade-in slide-in-from-right-12 duration-500 max-w-7xl mx-auto">
+                <button onClick={() => setActiveTrackStage(null)} className="mb-8 flex items-center gap-3 text-slate-400 hover:text-indigo-600 font-black text-xs uppercase tracking-widest transition-all group"><i className="fa-solid fa-arrow-left group-hover:-translate-x-1 transition-transform"></i>Back to Pipeline</button>
+                {(() => {
+                  const s = STAGES.find((st) => st.key === activeTrackStage)!;
+                  const stageJobs = jobs.filter((j) => trackedJobs[j.id] === activeTrackStage);
+                  return (
+                    <div className="space-y-10">
+                      <header className="flex items-end gap-6">
+                        <div className={`w-20 h-20 ${s.bg} ${s.color} rounded-3xl flex items-center justify-center text-3xl shadow-lg border border-white/50`}><i className={`fa-solid ${s.icon}`}></i></div>
+                        <div>
+                          <h2 className="text-5xl font-black text-slate-900 tracking-tight leading-none mb-2">{s.label} Space</h2>
+                          <p className="text-slate-400 font-bold">{stageJobs.length} active application{stageJobs.length !== 1 ? 's' : ''}</p>
+                        </div>
+                      </header>
+                      <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                        {stageJobs.map((job) => (
+                          <div
+                            key={job.id}
+                            onClick={() => { if (activeTrackStage === 'Customize') setCustomizingJob(job); if (activeTrackStage === 'Connect') setConnectingJob(job); }}
+                            className="bg-white p-8 rounded-[3rem] shadow-sm border border-slate-100 flex items-center justify-between group hover:border-indigo-100 transition-all cursor-pointer"
+                          >
+                            <div className="flex items-center gap-6">
+                              <div className="w-16 h-16 bg-slate-50 rounded-2xl flex items-center justify-center p-3 border border-slate-100">
+                                {job.logo && job.logo.startsWith('http') ? <img src={job.logo} alt="" className="w-full h-full object-contain" /> : <span className="text-slate-400 font-black text-xl">{job.company?.charAt(0) || '?'}</span>}
+                              </div>
+                              <div>
+                                <h4 className="text-xl font-black text-slate-900 tracking-tight mb-1">{job.title}</h4>
+                                <p className="text-xs font-black text-indigo-500 uppercase tracking-widest">{job.company}</p>
+                                <p className="text-[10px] font-bold text-slate-400 mt-2 flex items-center gap-2"><i className="fa-solid fa-door-open"></i> Enter {s.label} Workspace</p>
+                              </div>
+                            </div>
+                            <div className="flex gap-2">
+                              <button onClick={(e) => { e.stopPropagation(); untrackJob(job.id); }} className="w-12 h-12 bg-rose-50 text-rose-500 rounded-2xl flex items-center justify-center hover:bg-rose-500 hover:text-white transition-all shadow-sm"><i className="fa-solid fa-trash-can"></i></button>
+                              <button onClick={(e) => { e.stopPropagation(); const idx = STAGES.findIndex((st) => st.key === activeTrackStage); if (idx >= 0 && idx < STAGES.length - 1) moveJob(job.id, STAGES[idx + 1].key); }} className={`px-6 h-12 ${s.accent} text-white rounded-2xl font-black text-xs uppercase tracking-widest flex items-center gap-3 hover:opacity-90 shadow-xl transition-all`}>Next <i className="fa-solid fa-arrow-right"></i></button>
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  );
+                })()}
+              </div>
+            )}
+          </section>
+        )}
+
+        {activeNav === NavItem.Connect && (
+          <section className="animate-in fade-in slide-in-from-bottom-4 duration-500 max-w-5xl mx-auto">
+            <header className="mb-12">
+              <p className="text-slate-400 font-bold mb-1 text-xs uppercase tracking-[0.3em]">Network Intelligence</p>
+              <h2 className="text-4xl font-black text-[#1a1a3a] tracking-tight">Your Relationship Pipeline</h2>
+            </header>
+            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+              {allRecruiters.length > 0 ? (
+                allRecruiters.map((rec) => (
+                  <div key={rec.id} className="bg-white p-8 rounded-[3rem] border border-slate-100 flex flex-col hover:border-emerald-100 transition-all shadow-sm group">
+                    <div className="flex items-center gap-5 mb-6">
+                      <img src={rec.avatar} alt="" className="w-16 h-16 rounded-[1.5rem] object-cover border border-slate-100" />
+                      <div>
+                        <h4 className="text-xl font-black text-slate-900 leading-tight">{rec.name}</h4>
+                        <p className="text-xs font-bold text-emerald-600">{rec.jobCompany}</p>
+                      </div>
+                    </div>
+                    <div className="bg-slate-50 p-4 rounded-2xl mb-6 flex-1">
+                      <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest mb-1">Role & Focus</p>
+                      <p className="text-sm font-bold text-slate-700 leading-snug">{rec.role}</p>
+                    </div>
+                    <div className="flex items-center justify-between">
+                      <button
+                        onClick={() => {
+                          const job = jobs.find((j) => j.company === rec.jobCompany);
+                          if (job) { setConnectingJob(job); handleNavigate(NavItem.Track); setViewingDraft(recruiterDrafts[rec.id] ? { recruiter: rec, draft: recruiterDrafts[rec.id] } : null); }
+                        }}
+                        className="text-xs font-black uppercase tracking-widest text-indigo-600 hover:underline"
+                      >
+                        Manage Connection
+                      </button>
+                      {recruiterDrafts[rec.id] && (
+                        <span className="w-8 h-8 bg-emerald-100 text-emerald-600 rounded-lg flex items-center justify-center text-xs">
+                          <i className="fa-solid fa-file-lines"></i>
+                        </span>
+                      )}
+                    </div>
+                  </div>
+                ))
+              ) : (
+                <div className="col-span-full py-24 text-center border-4 border-dashed border-slate-100 rounded-[3rem] bg-white/50">
+                  <div className="w-20 h-20 bg-slate-50 rounded-full flex items-center justify-center text-slate-200 mx-auto mb-8">
+                    <i className="fa-solid fa-user-plus text-3xl"></i>
+                  </div>
+                  <h3 className="text-2xl font-black text-slate-300 tracking-tight">No Active Connections</h3>
+                  <p className="text-slate-400 font-bold mt-2 mb-8">Move jobs to the &apos;Connect&apos; stage to start building your network.</p>
+                  <button onClick={() => handleNavigate(NavItem.Track)} className="bg-indigo-600 text-white px-8 py-4 rounded-xl font-black text-xs uppercase tracking-widest shadow-xl shadow-indigo-100 hover:bg-indigo-700 transition-all">Go to Pipeline</button>
+                </div>
+              )}
             </div>
           </section>
         )}
@@ -1570,7 +2049,17 @@ const App: React.FC = () => {
 
       {/* Global Job Detail Overlay */}
       {selectedJob && (
-        <JobDetailModal job={selectedJob} onClose={() => setSelectedJob(null)} />
+        <JobDetailModal
+          job={selectedJob}
+          onClose={() => setSelectedJob(null)}
+          onTrack={() => {
+            trackJob(selectedJob.id);
+            handleNavigate(NavItem.Track);
+            setActiveTrackStage('Customize');
+            setSelectedJob(null);
+          }}
+          isTracked={!!trackedJobs[selectedJob.id]}
+        />
       )}
 
       {/* Preferences Edit Modal */}
@@ -1582,6 +2071,15 @@ const App: React.FC = () => {
         />
       )}
 
+      <style>{`
+        .custom-dark-scrollbar::-webkit-scrollbar { width: 6px; }
+        .custom-dark-scrollbar::-webkit-scrollbar-track { background: transparent; }
+        .custom-dark-scrollbar::-webkit-scrollbar-thumb { background: rgba(255,255,255,0.1); border-radius: 10px; }
+        .custom-dark-scrollbar::-webkit-scrollbar-thumb:hover { background: rgba(255,255,255,0.2); }
+        .custom-scrollbar::-webkit-scrollbar { width: 6px; }
+        .custom-scrollbar::-webkit-scrollbar-track { background: transparent; }
+        .custom-scrollbar::-webkit-scrollbar-thumb { background: rgba(0,0,0,0.05); border-radius: 10px; }
+      `}</style>
     </div>
   );
 };

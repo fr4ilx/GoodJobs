@@ -5,9 +5,11 @@ import { Job } from '../types';
 interface JobDetailModalProps {
   job: Job;
   onClose: () => void;
+  onTrack?: () => void;
+  isTracked?: boolean;
 }
 
-const JobDetailModal: React.FC<JobDetailModalProps> = ({ job, onClose }) => {
+const JobDetailModal: React.FC<JobDetailModalProps> = ({ job, onClose, onTrack, isTracked }) => {
   return (
     <div className="fixed inset-0 z-[100] flex items-center justify-end p-4 sm:p-6 lg:p-10">
       {/* Backdrop */}
@@ -125,9 +127,15 @@ const JobDetailModal: React.FC<JobDetailModalProps> = ({ job, onClose }) => {
               Apply Now
             </button>
           )}
-          <button className="w-16 h-16 rounded-2xl border-2 border-slate-200 flex items-center justify-center text-slate-400 hover:text-indigo-600 hover:border-indigo-100 transition-all">
-            <i className="fa-regular fa-bookmark text-xl"></i>
-          </button>
+          {onTrack && (
+            <button 
+              onClick={onTrack}
+              disabled={!!isTracked}
+              className={`w-16 h-16 rounded-2xl border-2 flex items-center justify-center transition-all ${isTracked ? 'bg-emerald-50 border-emerald-100 text-emerald-600' : 'border-slate-200 text-slate-400 hover:text-indigo-600 hover:border-indigo-100'}`}
+            >
+              {isTracked ? <i className="fa-solid fa-check text-xl"></i> : <i className="fa-solid fa-list-check text-xl"></i>}
+            </button>
+          )}
         </div>
       </div>
       
