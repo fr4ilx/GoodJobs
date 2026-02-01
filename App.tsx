@@ -9,6 +9,7 @@ import SignUpPage from './components/SignUpPage';
 import PreferencesPage from './components/PreferencesPage';
 import ResumeUploadPage from './components/ResumeUploadPage';
 import JobDetailModal from './components/JobDetailModal';
+import CustomizeJobModal from './components/CustomizeJobModal';
 import PreferencesModal from './components/PreferencesModal';
 import VisualizeSkillsPage from './components/VisualizeSkillsPage';
 import { calculateMatchScore, analyzeSkills, validateGeminiApiKey, generateCustomizedResume, findRecruiters, generateOutreachEmail, extractJobKeywordsBatch, generateJobFitAnalysisBatch } from './services/geminiService';
@@ -117,10 +118,19 @@ const App: React.FC = () => {
           if (userData.resumeContent || userData.resumeFileURLs?.length) {
             setIsResumeComplete(true);
           }
+          // GitHub URL: from OAuth connection (githubUsername) or first GitHub project link
+          let githubUrl = '';
+          if (userData.githubUsername) {
+            githubUrl = `https://github.com/${userData.githubUsername}`;
+          } else if (userData.projectLinks?.length) {
+            const ghMatch = userData.projectLinks.find((l: string) => l.includes('github.com'))?.match(/github\.com\/([^/]+)/);
+            if (ghMatch) githubUrl = `https://github.com/${ghMatch[1]}`;
+          }
           // Load their data - use name from Firestore if available, otherwise use displayName
           setUserProfile(prev => ({
             ...prev,
             name: userData.name || currentUser.displayName || prev.name, // Prefer Firestore name
+            githubUrl: githubUrl || prev.githubUrl,
             preferences: userData.preferences,
             resumeContent: userData.resumeContent || '',
             projectLinks: userData.projectLinks || []
@@ -947,7 +957,7 @@ const App: React.FC = () => {
 
   const handleNavigate = (nav: NavItem) => {
     setActiveTrackStage(null);
-    if (nav !== NavItem.Track && nav !== NavItem.Customize) {
+    if (nav !== NavItem.Track && nav !== NavItem.Customize && nav !== NavItem.Connect) {
       setCustomizingJob(null);
       setConnectingJob(null);
       setViewingDraft(null);
@@ -1068,56 +1078,20 @@ const App: React.FC = () => {
         {(activeNav === NavItem.Track || activeNav === NavItem.Customize) && (
           <section className="animate-in fade-in duration-500 h-full">
             {customizingJob ? (
-              <div className="animate-in slide-in-from-right-12 duration-500 h-[calc(100vh-100px)] flex flex-col">
-                <header className="flex items-center justify-between mb-8">
-                  <div className="flex items-center gap-4">
-                    <button onClick={() => setCustomizingJob(null)} className="w-10 h-10 bg-white border border-slate-200 rounded-xl flex items-center justify-center text-slate-400 hover:text-indigo-600 transition-all shadow-sm">
-                      <i className="fa-solid fa-arrow-left"></i>
-                    </button>
-                    <div>
-                      <h2 className="text-2xl font-black text-slate-900 leading-tight">Tailoring: {customizingJob.title}</h2>
-                      <p className="text-indigo-600 font-bold text-xs uppercase tracking-widest">{customizingJob.company}</p>
-                    </div>
-                  </div>
-                  <div className="flex gap-3">
-                    <button onClick={() => handleTailor(customizingJob)} disabled={isTailoring} className="bg-indigo-600 text-white px-6 py-3 rounded-xl font-black text-xs uppercase tracking-widest flex items-center gap-3 hover:bg-indigo-700 transition-all disabled:opacity-50 shadow-lg shadow-indigo-100">
-                      {isTailoring ? <i className="fa-solid fa-spinner animate-spin"></i> : <i className="fa-solid fa-wand-sparkles"></i>}
-                      Tailor Resume
-                    </button>
-                    <button onClick={() => { moveJob(customizingJob.id, 'Connect'); setCustomizingJob(null); }} className="bg-emerald-600 text-white px-6 py-3 rounded-xl font-black text-xs uppercase tracking-widest flex items-center gap-3 hover:bg-emerald-700 transition-all shadow-lg shadow-emerald-100">
-                      Finalize & Advance
-                      <i className="fa-solid fa-circle-check"></i>
-                    </button>
-                  </div>
-                </header>
-                <div className="flex-1 grid grid-cols-1 lg:grid-cols-3 gap-6 overflow-hidden pb-8">
-                  <div className="bg-white rounded-[2rem] p-8 shadow-sm border border-slate-100 flex flex-col overflow-hidden">
-                    <div className="p-5 border-b border-slate-50 bg-slate-50/50 flex items-center justify-between">
-                      <span className="text-[10px] font-black text-slate-400 uppercase tracking-widest">Requirements</span>
-                    </div>
-                    <div className="p-8 overflow-y-auto leading-relaxed text-slate-600 text-sm font-medium custom-scrollbar">{customizingJob.description}</div>
-                  </div>
-                  <div className="bg-white rounded-[2rem] p-8 shadow-sm border border-slate-100 flex flex-col overflow-hidden">
-                    <div className="p-5 border-b border-slate-50 bg-slate-50/50 flex items-center justify-between">
-                      <span className="text-[10px] font-black text-slate-400 uppercase tracking-widest">Master Resume</span>
-                    </div>
-                    <textarea readOnly value={userProfile.resumeContent || ''} className="p-8 flex-1 bg-transparent text-slate-500 text-sm font-medium leading-relaxed border-none outline-none resize-none overflow-y-auto custom-scrollbar" />
-                  </div>
-                  <div className="bg-slate-900 rounded-[2rem] shadow-2xl flex flex-col overflow-hidden">
-                    <div className="p-5 border-b border-white/5 bg-white/5 flex items-center justify-between">
-                      <span className="text-[10px] font-black text-white/40 uppercase tracking-widest">Tailored Resume</span>
-                    </div>
-                    {isTailoring ? (
-                      <div className="flex-1 flex flex-col items-center justify-center text-center text-white p-12">
-                        <div className="w-16 h-16 border-4 border-indigo-500/20 border-t-indigo-500 rounded-full animate-spin mb-6"></div>
-                        <h4 className="text-lg font-black mb-2">Re-Engineering...</h4>
-                      </div>
-                    ) : (
-                      <textarea value={customizedResumes[customizingJob.id] || "Click 'Tailor Resume' to generate a job-specific version."} onChange={(e) => setCustomizedResumes((prev) => ({ ...prev, [customizingJob.id]: e.target.value }))} className="p-8 flex-1 bg-transparent text-white/80 text-sm font-medium leading-relaxed border-none outline-none resize-none overflow-y-auto custom-dark-scrollbar" />
-                    )}
-                  </div>
-                </div>
-              </div>
+              <CustomizeJobModal
+                job={customizingJob}
+                onClose={() => setCustomizingJob(null)}
+                mySkills={skillsVisualization?.all_skills}
+                skillsVisualization={skillsVisualization}
+                userName={userProfile.name}
+                userEmail={userProfile.email}
+                userGithub={userProfile.githubUrl}
+                userId={currentUser?.uid ?? ''}
+                onSave={(jobId) => {
+                  moveJob(jobId, 'Connect');
+                  setCustomizingJob(null);
+                }}
+              />
             ) : connectingJob ? (
               <div className="animate-in slide-in-from-right-12 duration-500 max-w-7xl mx-auto h-[calc(100vh-100px)] flex flex-col">
                 <header className="flex items-center justify-between mb-8">
@@ -1217,6 +1191,35 @@ const App: React.FC = () => {
                   </div>
                 </div>
               </div>
+            ) : activeNav === NavItem.Customize ? (
+              <section className="animate-in fade-in slide-in-from-bottom-4 duration-500 max-w-7xl mx-auto">
+                <header className="mb-12">
+                  <p className="text-slate-400 font-bold mb-1 text-xs uppercase tracking-[0.3em]">Tailor Your Application</p>
+                  <h2 className="text-4xl font-black text-[#1a1a3a] tracking-tight">Customize</h2>
+                  <p className="text-slate-500 text-sm mt-2">Jobs to tailor. Click &quot;Track Job&quot; in the Jobs tab to add jobs here.</p>
+                </header>
+                <div className="grid grid-cols-1 gap-4">
+                  {jobs.filter((j) => trackedJobs[j.id] === 'Customize').length > 0 ? (
+                    jobs.filter((j) => trackedJobs[j.id] === 'Customize').map((job) => (
+                      <JobCard
+                        key={job.id}
+                        job={job}
+                        onClick={() => setCustomizingJob(job)}
+                        isTracked={true}
+                        onRemove={() => untrackJob(job.id)}
+                      />
+                    ))
+                  ) : (
+                    <div className="text-center py-32 bg-white rounded-[3rem] border-2 border-dashed border-slate-100">
+                      <div className="w-20 h-20 bg-orange-50 rounded-full flex items-center justify-center mx-auto mb-6">
+                        <i className="fa-solid fa-pen-nib text-2xl text-orange-200"></i>
+                      </div>
+                      <h3 className="text-xl font-bold text-slate-900 mb-2">No jobs to customize</h3>
+                      <p className="text-slate-400 font-medium max-w-xs mx-auto">Track jobs from the Jobs tab to add them here. Then tailor your resume for each role.</p>
+                    </div>
+                  )}
+                </div>
+              </section>
             ) : (
               <div className="animate-in fade-in duration-500 w-full">
                 <header className="mb-8">
@@ -1283,55 +1286,177 @@ const App: React.FC = () => {
         )}
 
         {activeNav === NavItem.Connect && (
-          <section className="animate-in fade-in slide-in-from-bottom-4 duration-500 max-w-5xl mx-auto">
+          <section className="animate-in fade-in slide-in-from-bottom-4 duration-500 max-w-7xl mx-auto">
+            {connectingJob ? (
+              <div className="animate-in slide-in-from-right-12 duration-500 max-w-7xl mx-auto h-[calc(100vh-100px)] flex flex-col">
+                <header className="flex items-center justify-between mb-8">
+                  <div className="flex items-center gap-4">
+                    <button onClick={() => setConnectingJob(null)} className="w-10 h-10 bg-white border border-slate-200 rounded-xl flex items-center justify-center text-slate-400 hover:text-indigo-600 transition-all shadow-sm">
+                      <i className="fa-solid fa-arrow-left"></i>
+                    </button>
+                    <div>
+                      <h2 className="text-2xl font-black text-slate-900 leading-tight">Stakeholder Radar: {connectingJob.company}</h2>
+                      <p className="text-emerald-600 font-bold text-xs uppercase tracking-widest">{connectingJob.title}</p>
+                    </div>
+                  </div>
+                  <div className="flex gap-3">
+                    <button onClick={() => handleDiscoverRecruiters(connectingJob)} disabled={isDiscovering} className="bg-emerald-600 text-white px-6 py-3 rounded-xl font-black text-xs uppercase tracking-widest flex items-center gap-3 hover:bg-emerald-700 transition-all disabled:opacity-50 shadow-lg shadow-emerald-100">
+                      {isDiscovering ? <i className="fa-solid fa-spinner animate-spin"></i> : <i className="fa-solid fa-users-viewfinder"></i>}
+                      Scan Stakeholders
+                    </button>
+                    <button onClick={() => { moveJob(connectingJob.id, 'Apply'); setConnectingJob(null); }} className="bg-slate-900 text-white px-6 py-3 rounded-xl font-black text-xs uppercase tracking-widest flex items-center gap-3 hover:bg-slate-800 transition-all shadow-xl">
+                      Move to Apply
+                      <i className="fa-solid fa-arrow-right"></i>
+                    </button>
+                  </div>
+                </header>
+                <div className="flex-1 grid grid-cols-1 lg:grid-cols-2 gap-8 overflow-hidden pb-8">
+                  <div className="space-y-4 overflow-y-auto pr-4 custom-scrollbar">
+                    {(jobRecruiters[connectingJob.id] || []).map((rec) => (
+                      <div key={rec.id} className="bg-white p-6 rounded-[2rem] border border-slate-100 shadow-sm flex items-center justify-between group hover:border-emerald-100 transition-all">
+                        <div className="flex items-center gap-5">
+                          <img src={rec.avatar} alt="" className="w-14 h-14 rounded-2xl object-cover shadow-sm border border-slate-100" />
+                          <div>
+                            <h4 className="font-black text-slate-900 leading-tight">{rec.name}</h4>
+                            <p className="text-xs font-bold text-emerald-600 mb-1">{rec.role}</p>
+                            <p className="text-[10px] text-slate-400 font-medium leading-tight max-w-[200px]">{rec.relevance}</p>
+                          </div>
+                        </div>
+                        <button onClick={() => handleDraftEmail(connectingJob, rec)} disabled={isDrafting === rec.id} className="flex-none bg-emerald-50 text-emerald-600 px-5 py-3 rounded-xl text-[10px] font-black uppercase tracking-widest hover:bg-emerald-600 hover:text-white transition-all disabled:opacity-50">
+                          {isDrafting === rec.id ? 'Thinking...' : (recruiterDrafts[rec.id] ? 'Review Draft' : 'Draft Email')}
+                        </button>
+                      </div>
+                    ))}
+                    {!(jobRecruiters[connectingJob.id] || []).length && !isDiscovering && (
+                      <div className="h-full flex flex-col items-center justify-center p-12 text-center border-4 border-dashed border-slate-100 rounded-[3rem] bg-white/50">
+                        <i className="fa-solid fa-satellite-dish text-4xl text-slate-200 mb-6"></i>
+                        <h4 className="text-xl font-black text-slate-300 tracking-tight">Radar Silent</h4>
+                        <p className="text-slate-400 font-bold mt-2">Run stakeholder discovery to find decision makers at this company.</p>
+                      </div>
+                    )}
+                    {isDiscovering && (
+                      <div className="space-y-4">
+                        {[1, 2, 3].map((i) => (
+                          <div key={i} className="bg-white p-6 rounded-[2rem] animate-pulse border border-slate-100 flex items-center gap-5">
+                            <div className="w-14 h-14 bg-slate-50 rounded-2xl"></div>
+                            <div className="flex-1 space-y-2">
+                              <div className="h-4 bg-slate-50 w-1/4 rounded"></div>
+                              <div className="h-3 bg-slate-50 w-1/3 rounded"></div>
+                              <div className="h-2 bg-slate-50 w-1/2 rounded"></div>
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                  <div className="bg-white rounded-[3rem] border border-slate-100 shadow-2xl flex flex-col overflow-hidden">
+                    <div className="p-6 border-b border-slate-50 flex items-center justify-between bg-slate-50/30">
+                      <span className="text-[10px] font-black text-slate-400 uppercase tracking-widest">Outreach Workbench</span>
+                      <i className="fa-solid fa-pen-nib text-emerald-400"></i>
+                    </div>
+                    {viewingDraft ? (
+                      <div className="flex-1 flex flex-col overflow-hidden p-8 animate-in fade-in zoom-in-95 duration-300">
+                        <div className="flex items-center gap-4 mb-6 pb-6 border-b border-slate-50">
+                          <img src={viewingDraft.recruiter.avatar} alt="" className="w-12 h-12 rounded-xl" />
+                          <div>
+                            <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest">Direct Contact</p>
+                            <p className="text-xs font-bold text-slate-900">{viewingDraft.recruiter.name} &lt;{viewingDraft.recruiter.email}&gt;</p>
+                          </div>
+                        </div>
+                        <div className="flex-1 bg-slate-50 p-8 rounded-3xl border border-slate-100 overflow-y-auto">
+                          <textarea value={viewingDraft.draft} onChange={(e) => setViewingDraft({ ...viewingDraft, draft: e.target.value })} className="w-full h-full bg-transparent text-sm font-medium leading-relaxed text-slate-600 border-none outline-none resize-none" />
+                        </div>
+                        <div className="mt-6 flex gap-3">
+                          <button className="flex-1 bg-emerald-600 text-white py-4 rounded-xl font-black text-xs uppercase tracking-widest shadow-lg shadow-emerald-100 hover:bg-emerald-700 transition-all flex items-center justify-center gap-2">
+                            <i className="fa-solid fa-paper-plane"></i>
+                            Send to Recruiter
+                          </button>
+                          <button onClick={() => setViewingDraft(null)} className="px-6 border border-slate-200 text-slate-400 rounded-xl font-black text-xs uppercase tracking-widest hover:bg-slate-50 transition-all">Dismiss</button>
+                        </div>
+                      </div>
+                    ) : (
+                      <div className="flex-1 flex flex-col items-center justify-center p-12 text-center">
+                        <div className="w-20 h-20 bg-slate-50 rounded-3xl flex items-center justify-center text-slate-200 mb-6 border border-slate-100">
+                          <i className="fa-solid fa-envelope-open-text text-2xl"></i>
+                        </div>
+                        <h4 className="text-lg font-black text-slate-300 tracking-tight">Workbench Empty</h4>
+                        <p className="text-slate-400 font-bold mt-2">Select a contact to generate or review a personalized outreach draft.</p>
+                      </div>
+                    )}
+                  </div>
+                </div>
+              </div>
+            ) : (
+            <>
             <header className="mb-12">
               <p className="text-slate-400 font-bold mb-1 text-xs uppercase tracking-[0.3em]">Network Intelligence</p>
-              <h2 className="text-4xl font-black text-[#1a1a3a] tracking-tight">Your Relationship Pipeline</h2>
+              <h2 className="text-4xl font-black text-[#1a1a3a] tracking-tight">Connect</h2>
+              <p className="text-slate-500 text-sm mt-2">Jobs ready for stakeholder outreach. Save a tailored resume in Customize to add jobs here.</p>
             </header>
-            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-              {allRecruiters.length > 0 ? (
-                allRecruiters.map((rec) => (
-                  <div key={rec.id} className="bg-white p-8 rounded-[3rem] border border-slate-100 flex flex-col hover:border-emerald-100 transition-all shadow-sm group">
-                    <div className="flex items-center gap-5 mb-6">
-                      <img src={rec.avatar} alt="" className="w-16 h-16 rounded-[1.5rem] object-cover border border-slate-100" />
-                      <div>
-                        <h4 className="text-xl font-black text-slate-900 leading-tight">{rec.name}</h4>
-                        <p className="text-xs font-bold text-emerald-600">{rec.jobCompany}</p>
-                      </div>
-                    </div>
-                    <div className="bg-slate-50 p-4 rounded-2xl mb-6 flex-1">
-                      <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest mb-1">Role & Focus</p>
-                      <p className="text-sm font-bold text-slate-700 leading-snug">{rec.role}</p>
-                    </div>
-                    <div className="flex items-center justify-between">
-                      <button
-                        onClick={() => {
-                          const job = jobs.find((j) => j.company === rec.jobCompany);
-                          if (job) { setConnectingJob(job); handleNavigate(NavItem.Track); setViewingDraft(recruiterDrafts[rec.id] ? { recruiter: rec, draft: recruiterDrafts[rec.id] } : null); }
-                        }}
-                        className="text-xs font-black uppercase tracking-widest text-indigo-600 hover:underline"
-                      >
-                        Manage Connection
-                      </button>
-                      {recruiterDrafts[rec.id] && (
-                        <span className="w-8 h-8 bg-emerald-100 text-emerald-600 rounded-lg flex items-center justify-center text-xs">
-                          <i className="fa-solid fa-file-lines"></i>
-                        </span>
-                      )}
-                    </div>
-                  </div>
+            <div className="grid grid-cols-1 gap-4 mb-12">
+              {jobs.filter((j) => trackedJobs[j.id] === 'Connect').length > 0 ? (
+                jobs.filter((j) => trackedJobs[j.id] === 'Connect').map((job) => (
+                  <JobCard
+                    key={job.id}
+                    job={job}
+                    onClick={() => setConnectingJob(job)}
+                    isTracked={true}
+                    onRemove={() => untrackJob(job.id)}
+                  />
                 ))
               ) : (
-                <div className="col-span-full py-24 text-center border-4 border-dashed border-slate-100 rounded-[3rem] bg-white/50">
-                  <div className="w-20 h-20 bg-slate-50 rounded-full flex items-center justify-center text-slate-200 mx-auto mb-8">
-                    <i className="fa-solid fa-user-plus text-3xl"></i>
+                <div className="text-center py-24 bg-white rounded-[3rem] border-2 border-dashed border-slate-100">
+                  <div className="w-20 h-20 bg-emerald-50 rounded-full flex items-center justify-center mx-auto mb-6">
+                    <i className="fa-solid fa-comments text-2xl text-emerald-200"></i>
                   </div>
-                  <h3 className="text-2xl font-black text-slate-300 tracking-tight">No Active Connections</h3>
-                  <p className="text-slate-400 font-bold mt-2 mb-8">Move jobs to the &apos;Connect&apos; stage to start building your network.</p>
-                  <button onClick={() => handleNavigate(NavItem.Track)} className="bg-indigo-600 text-white px-8 py-4 rounded-xl font-black text-xs uppercase tracking-widest shadow-xl shadow-indigo-100 hover:bg-indigo-700 transition-all">Go to Current Progress</button>
+                  <h3 className="text-xl font-bold text-slate-900 mb-2">No jobs in Connect</h3>
+                  <p className="text-slate-400 font-medium max-w-xs mx-auto">Save a tailored resume in the Customize tab to move jobs here. Then reach out to stakeholders.</p>
+                  <button onClick={() => handleNavigate(NavItem.Customize)} className="mt-6 bg-indigo-600 text-white px-6 py-3 rounded-xl font-bold text-sm hover:bg-indigo-700 transition-all">
+                    Go to Customize
+                  </button>
                 </div>
               )}
             </div>
+            {allRecruiters.length > 0 && (
+              <>
+                <h3 className="text-xl font-black text-slate-900 mb-6">Your Relationship Pipeline</h3>
+                <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+                  {allRecruiters.map((rec) => (
+                    <div key={rec.id} className="bg-white p-8 rounded-[3rem] border border-slate-100 flex flex-col hover:border-emerald-100 transition-all shadow-sm group">
+                      <div className="flex items-center gap-5 mb-6">
+                        <img src={rec.avatar} alt="" className="w-16 h-16 rounded-[1.5rem] object-cover border border-slate-100" />
+                        <div>
+                          <h4 className="text-xl font-black text-slate-900 leading-tight">{rec.name}</h4>
+                          <p className="text-xs font-bold text-emerald-600">{rec.jobCompany}</p>
+                        </div>
+                      </div>
+                      <div className="bg-slate-50 p-4 rounded-2xl mb-6 flex-1">
+                        <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest mb-1">Role & Focus</p>
+                        <p className="text-sm font-bold text-slate-700 leading-snug">{rec.role}</p>
+                      </div>
+                      <div className="flex items-center justify-between">
+                        <button
+                          onClick={() => {
+                            const job = jobs.find((j) => j.company === rec.jobCompany);
+                            if (job) { setConnectingJob(job); setViewingDraft(recruiterDrafts[rec.id] ? { recruiter: rec, draft: recruiterDrafts[rec.id] } : null); }
+                          }}
+                          className="text-xs font-black uppercase tracking-widest text-indigo-600 hover:underline"
+                        >
+                          Manage Connection
+                        </button>
+                        {recruiterDrafts[rec.id] && (
+                          <span className="w-8 h-8 bg-emerald-100 text-emerald-600 rounded-lg flex items-center justify-center text-xs">
+                            <i className="fa-solid fa-file-lines"></i>
+                          </span>
+                        )}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </>
+            )}
+            </>
+            )}
           </section>
         )}
 

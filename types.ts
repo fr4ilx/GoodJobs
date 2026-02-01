@@ -50,6 +50,7 @@ export interface UserProfile {
   name: string;
   resumeContent: string;
   email: string;
+  githubUrl?: string;  // User's GitHub profile URL (from connection or project links)
   preferences?: UserPreferences;
   resumeFiles?: File[];
   projectFiles?: File[];
@@ -143,11 +144,32 @@ export interface AwardCertificatePublication {
   evidence: string[];
 }
 
+export interface EducationEntry {
+  id: string;
+  school: string;
+  degree: string;
+  major?: string;
+  year: string;
+  gpa?: string;
+  source_names: string[];
+}
+
 export interface SkillsVisualization {
   inaccessible_sources: InaccessibleSource[];
   skill_aliases_map: Record<string, string>;
+  education_entries: EducationEntry[];
   professional_experiences: ProfessionalExperience[];
   projects: Project[];
   awards_certificates_publications: AwardCertificatePublication[];
   all_skills: string[];
+}
+
+/** Structured resume content for tailored resumes (from generateTailoredResume) */
+export interface TailoredResumeContent {
+  contact: { name: string; email: string; github?: string };
+  summary: string;
+  experiences: Array<{ company: string; title: string; location?: string; dates: string; bullets: string[] }>;
+  projects: Array<{ name: string; type?: string; dates?: string; bullets: string[] }>;
+  skills: string[];
+  education?: { school: string; degree: string; major?: string; year: string };
 }

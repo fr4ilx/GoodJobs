@@ -1,7 +1,7 @@
 import { doc, setDoc, getDoc, updateDoc, serverTimestamp, deleteField, collection, getDocs, writeBatch } from 'firebase/firestore';
 import { ref, uploadBytes, getDownloadURL } from 'firebase/storage';
 import { db, storage } from '../config/firebase';
-import { UserPreferences, SkillsVisualization, Job, JobAnalysis } from '../types';
+import { UserPreferences, SkillsVisualization, Job, JobAnalysis, TailoredResumeContent } from '../types';
 
 export interface FileMetadata {
   name: string;
@@ -315,7 +315,7 @@ export const saveJobAnalysis = async (userId: string, jobId: string, analysis: J
       localStorage.setItem(key, JSON.stringify(map));
     } catch (e) {
       console.error('localStorage save failed:', e);
-      throw error;
+      throw e;
     }
   }
 };
@@ -344,5 +344,74 @@ export const getJobAnalyses = async (userId: string): Promise<Record<string, Job
     } catch {
       return {};
     }
+  }
+};
+
+// ========== Tailored Resumes (per user, per job) ==========
+
+const TAILORED_RESUMES_STORAGE_KEY = (uid: string) => `goodjobs_tailored_resumes_${uid}`;
+
+/** Saved tailored resume document */
+export interface SavedTailoredResume {
+  content: TailoredResumeContent;
+  htmlContent?: string;  // edited HTML; used for display/PDF when present
+  version?: number;
+}
+
+/** Save tailored resume for a job. Firestore with localStorage fallback. */
+export const saveTailoredResume = async (
+  userId: string,
+  jobId: string,
+  data: { content: TailoredResumeContent; htmlContent?: string },
+  version?: number
+): Promise<void> => {
+  try {
+    const ref = doc(db, 'users', userId, 'tailoredResumes', jobId);
+    await setDoc(ref, {
+      content: data.content,
+      htmlContent: data.htmlContent,
+      version: version ?? 1,
+      updatedAt: serverTimestamp()
+    });
+  } catch {
+    try {
+      const key = TAILORED_RESUMES_STORAGE_KEY(userId);
+      const stored = localStorage.getItem(key);
+      const map: Record<string, SavedTailoredResume> = stored ? JSON.parse(stored) : {};
+      map[jobId] = { content: data.content, htmlContent: data.htmlContent, version: version ?? 1 };
+      localStorage.setItem(key, JSON.stringify(map));
+    } catch (e) {
+      console.error('Tailored resume save failed:', e);
+      throw e;
+    }
+  }
+};
+
+/** Get tailored resume for a job. Returns null if not found. Firestore with localStorage fallback. */
+export const getTailoredResume = async (
+  userId: string,
+  jobId: string
+): Promise<SavedTailoredResume | null> => {
+  try {
+    const ref = doc(db, 'users', userId, 'tailoredResumes', jobId);
+    const snap = await getDoc(ref);
+    if (snap.exists()) {
+      const d = snap.data();
+      return {
+        content: d.content as TailoredResumeContent,
+        htmlContent: d.htmlContent,
+        version: d.version
+      };
+    }
+  } catch {
+    /* fall through to localStorage */
+  }
+  try {
+    const key = TAILORED_RESUMES_STORAGE_KEY(userId);
+    const stored = localStorage.getItem(key);
+    const map: Record<string, SavedTailoredResume> = stored ? JSON.parse(stored) : {};
+    return map[jobId] ?? null;
+  } catch {
+    return null;
   }
 };

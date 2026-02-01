@@ -1,6 +1,6 @@
 
 import { GoogleGenAI, Type } from "@google/genai";
-import { SkillsVisualization, Recruiter, JobAnalysis } from "../types";
+import { SkillsVisualization, Recruiter, JobAnalysis, Job, TailoredResumeContent } from "../types";
 import { fetchGitHubContent, parseGitHubUrl } from "./githubService";
 import { extractTextFromPDF } from "./pdfService";
 
@@ -497,6 +497,7 @@ Return ONLY valid JSON matching the exact schema provided.`;
             reason: error instanceof Error ? error.message : 'Unknown error during analysis'
           }],
           skill_aliases_map: {},
+          education_entries: [],
           professional_experiences: [],
           projects: [],
           awards_certificates_publications: [],
@@ -767,7 +768,7 @@ Return ONLY valid JSON matching the exact schema provided.`;
             },
             all_skills: { type: Type.ARRAY, items: { type: Type.STRING } }
           },
-          required: ["inaccessible_sources", "skill_aliases_map", "professional_experiences", "projects", "awards_certificates_publications", "all_skills"]
+          required: ["inaccessible_sources", "skill_aliases_map", "education_entries", "professional_experiences", "projects", "awards_certificates_publications", "all_skills"]
         }
       }
     });
@@ -1006,6 +1007,7 @@ Return ONLY valid JSON matching the exact schema provided.`;
               reason: err instanceof Error ? err.message : 'Unknown error during analysis'
             }],
             skill_aliases_map: {},
+            education_entries: [],
             professional_experiences: [],
             projects: [],
             awards_certificates_publications: [],
@@ -1125,6 +1127,7 @@ ${chunk.content}
 ${chunk.totalChunks && chunk.totalChunks > 1 ? `\n\nNOTE: This is part ${chunk.chunkIndex} of ${chunk.totalChunks} for the source "${chunk.originalSource}". When extracting information, include the original source name (${chunk.originalSource}) in source_names arrays, not this part identifier.` : ''}
 
 Extract and structure the following:
+- Education: Extract school, degree, major (if any), year (graduation), GPA (if mentioned). Include source_names with this source. Organize cleanly - no keyword extraction, just structured data.
 - Professional Experiences: Extract company, title, location, date range, bullets (XYZ format when possible), and skills. Include source_names array with this source.
 - Projects: Extract name, type (personal/academic/professional/unknown), date range, bullets, and skills. Include source_names array with this source.
 - Awards/Certificates/Publications: Extract type, name, issuer/venue, date, and evidence.
@@ -1159,6 +1162,22 @@ Return ONLY valid JSON matching the exact schema provided.`;
               _placeholder: { type: Type.STRING, description: "Placeholder - actual keys are dynamic" }
             },
             additionalProperties: { type: Type.STRING }
+          },
+          education_entries: {
+            type: Type.ARRAY,
+            items: {
+              type: Type.OBJECT,
+              properties: {
+                id: { type: Type.STRING },
+                school: { type: Type.STRING },
+                degree: { type: Type.STRING },
+                major: { type: Type.STRING },
+                year: { type: Type.STRING },
+                gpa: { type: Type.STRING },
+                source_names: { type: Type.ARRAY, items: { type: Type.STRING } }
+              },
+              required: ["id", "school", "degree", "year", "source_names"]
+            }
           },
           professional_experiences: {
             type: Type.ARRAY,
@@ -1344,7 +1363,7 @@ Return ONLY valid JSON matching the exact schema provided.`;
           },
           all_skills: { type: Type.ARRAY, items: { type: Type.STRING } }
         },
-        required: ["inaccessible_sources", "skill_aliases_map", "professional_experiences", "projects", "awards_certificates_publications", "all_skills"]
+        required: ["inaccessible_sources", "skill_aliases_map", "education_entries", "professional_experiences", "projects", "awards_certificates_publications", "all_skills"]
       }
     }
   });
@@ -1353,7 +1372,9 @@ Return ONLY valid JSON matching the exact schema provided.`;
     throw new Error('Empty response from Gemini API');
   }
 
-  return JSON.parse(response.text.trim()) as SkillsVisualization;
+  const parsed = JSON.parse(response.text.trim()) as SkillsVisualization;
+  if (!parsed.education_entries) parsed.education_entries = [];
+  return parsed;
 }
 
 /**
@@ -1363,6 +1384,7 @@ function mergeResults(results: SkillsVisualization[]): SkillsVisualization {
   const merged: SkillsVisualization = {
     inaccessible_sources: [],
     skill_aliases_map: {},
+    education_entries: [],
     professional_experiences: [],
     projects: [],
     awards_certificates_publications: [],
@@ -1382,6 +1404,24 @@ function mergeResults(results: SkillsVisualization[]): SkillsVisualization {
   for (const result of results) {
     Object.assign(merged.skill_aliases_map, result.skill_aliases_map || {});
   }
+
+  // Merge education (merge by school+degree; take most complete entry)
+  const educationMap = new Map<string, SkillsVisualization['education_entries'][0]>();
+  for (const result of results) {
+    for (const ed of result.education_entries || []) {
+      const key = `${(ed.school || '').toLowerCase()}_${(ed.degree || '').toLowerCase()}`;
+      const existing = educationMap.get(key);
+      if (existing) {
+        existing.source_names = [...new Set([...existing.source_names, ...ed.source_names])];
+        if (!existing.major && ed.major) existing.major = ed.major;
+        if (!existing.gpa && ed.gpa) existing.gpa = ed.gpa;
+        if (!existing.year && ed.year) existing.year = ed.year;
+      } else {
+        educationMap.set(key, { ...ed });
+      }
+    }
+  }
+  merged.education_entries = Array.from(educationMap.values());
 
   // Merge professional experiences (merge duplicates by company + title)
   // When merging, use originalSource from chunks to ensure proper source tracking
@@ -1569,10 +1609,11 @@ async function finalAssemblyPass(merged: SkillsVisualization, apiKey: string): P
 CRITICAL TASKS:
 1. CANONICAL SKILLS - Ensure all_skills contains only canonical, lowercase, deduplicated skills
 2. SKILL ALIASES - Update skill_aliases_map to map all variations to canonical forms
-3. SKILL DEDUPLICATION - Remove duplicate skills from professional_experiences and projects, ensuring evidence is merged
-4. EXPERIENCE MERGING - If any professional_experiences have the same company + title, merge them completely
-5. PROJECT DEDUPLICATION - If any projects have the same name, merge them completely
-6. SKILL GRAPH CLUSTERING - Ensure skill graphs don't have duplicate clusters or skills
+3. EDUCATION - Preserve education_entries, merge duplicates by school+degree
+4. SKILL DEDUPLICATION - Remove duplicate skills from professional_experiences and projects, ensuring evidence is merged
+5. EXPERIENCE MERGING - If any professional_experiences have the same company + title, merge them completely
+6. PROJECT DEDUPLICATION - If any projects have the same name, merge them completely
+7. SKILL GRAPH CLUSTERING - Ensure skill graphs don't have duplicate clusters or skills
 
 MERGED DATA:
 ${JSON.stringify(merged, null, 2)}
@@ -1609,6 +1650,22 @@ Return ONLY valid JSON matching the exact schema, with all normalization applied
               _placeholder: { type: Type.STRING, description: "Placeholder - actual keys are dynamic" }
             },
             additionalProperties: { type: Type.STRING }
+          },
+          education_entries: {
+            type: Type.ARRAY,
+            items: {
+              type: Type.OBJECT,
+              properties: {
+                id: { type: Type.STRING },
+                school: { type: Type.STRING },
+                degree: { type: Type.STRING },
+                major: { type: Type.STRING },
+                year: { type: Type.STRING },
+                gpa: { type: Type.STRING },
+                source_names: { type: Type.ARRAY, items: { type: Type.STRING } }
+              },
+              required: ["id", "school", "degree", "year", "source_names"]
+            }
           },
           professional_experiences: {
             type: Type.ARRAY,
@@ -1794,7 +1851,7 @@ Return ONLY valid JSON matching the exact schema, with all normalization applied
           },
           all_skills: { type: Type.ARRAY, items: { type: Type.STRING } }
         },
-        required: ["inaccessible_sources", "skill_aliases_map", "professional_experiences", "projects", "awards_certificates_publications", "all_skills"]
+        required: ["inaccessible_sources", "skill_aliases_map", "education_entries", "professional_experiences", "projects", "awards_certificates_publications", "all_skills"]
       }
     }
   });
@@ -1809,7 +1866,11 @@ Return ONLY valid JSON matching the exact schema, with all normalization applied
 
     try {
       const result = JSON.parse(response.text.trim()) as SkillsVisualization;
+      if (!result.education_entries && merged.education_entries?.length) {
+        result.education_entries = merged.education_entries;
+      }
       console.log('✅ finalAssemblyPass: Successfully parsed response:', {
+        education: result.education_entries?.length || 0,
         experiences: result.professional_experiences?.length || 0,
         projects: result.projects?.length || 0,
         skills: result.all_skills?.length || 0,
@@ -1913,6 +1974,209 @@ Job Description: ${jobDescription}`,
   } catch (error) {
     console.error('Tailoring Error:', error);
     return 'Error generating customized resume. Please try again.';
+  }
+}
+
+/** Input for generateTailoredResume */
+export interface TailoredResumeInput {
+  skillsVisualization: SkillsVisualization;
+  job: Job;
+  userName: string;
+  userEmail: string;
+  userGithub?: string;
+}
+
+/**
+ * Generates a job-tailored resume in one API call. Uses XYZ format, targets 85%+ keyword match.
+ * Output is structured JSON for editable display and PDF export.
+ */
+export async function generateTailoredResume(input: TailoredResumeInput): Promise<TailoredResumeContent> {
+  const apiKey = getGeminiApiKey();
+  const ai = new GoogleGenAI({ apiKey });
+  const { skillsVisualization, job, userName, userEmail, userGithub } = input;
+  const analysis = job.analysis;
+  const keywords = analysis?.keywords ?? [];
+  const whatLooksGood = analysis?.whatLooksGood ?? '';
+  const whatIsMissing = analysis?.whatIsMissing ?? '';
+
+  const expText = skillsVisualization.professional_experiences.map(e => {
+    const xyz = e.xyz_bullets.map(b => b.text).join('\n');
+    const nonXyz = e.non_xyz_bullets.map(b => b.text).join('\n');
+    const skills = [...e.hard_skills.map(s => s.skill), ...e.soft_skills.map(s => s.skill)].join(', ');
+    return `[${e.title} at ${e.company} (${e.date_range?.start || ''}-${e.date_range?.end || ''})]\nBullets (XYZ): ${xyz}\nOther: ${nonXyz}\nSkills: ${skills}`;
+  }).join('\n\n');
+
+  const projText = skillsVisualization.projects.map(p => {
+    const xyz = p.xyz_bullets.map(b => b.text).join('\n');
+    const nonXyz = p.non_xyz_bullets.map(b => b.text).join('\n');
+    const skills = [...p.hard_skills.map(s => s.skill), ...p.soft_skills.map(s => s.skill)].join(', ');
+    return `[${p.name} (${p.type}) ${p.date_range?.start || ''}-${p.date_range?.end || ''}]\nBullets: ${xyz}\n${nonXyz}\nSkills: ${skills}`;
+  }).join('\n\n');
+
+  const educationEntries = skillsVisualization.education_entries || [];
+  const eduText = educationEntries.length > 0
+    ? educationEntries.map(e => `- ${e.degree}${e.major ? ` in ${e.major}` : ''}, ${e.school} · ${e.year}${e.gpa ? ` (GPA: ${e.gpa})` : ''}`).join('\n')
+    : 'None provided';
+
+  const prompt = `You are an expert resume writer. Create a ONE-PAGE tailored resume for the candidate applying to this job.
+
+FORMATTING RULES (Google recruiter guidelines):
+- PDF-ready, black text, clean consistent font
+- NO objective section (they know you want the job)
+- Use bullet points only - no long paragraphs
+- Keep resume to 1 page - be ruthless. If a bullet spills to a second line, shorten it.
+- Education before experience if recent grad (<3 years); otherwise experience first (reverse chronological)
+- Contact info (name, email) prominent at top. Include GitHub if technical role.
+- For technical roles: list programming languages prominently
+
+XYZ BULLET FORMAT (critical - use for every bullet):
+"Accomplished [X] as measured by [Y], by doing [Z]"
+- X = accomplishment/result
+- Y = metric/scale (numbers, %, time)
+- Z = how you did it (action)
+
+Examples:
+- OK: "Won second place in hackathon"
+- Better: "Won second place out of 50 teams in hackathon"
+- Best: "Won second place out of 50 teams in hackathon at NJ Tech by developing an app that synchronizes mobile calendars with two colleagues"
+
+KEYWORD TARGET (CRITICAL - YOU MUST REACH 85%+): Target 85%+ keyword match. Rules:
+1. DO NOT change or remove the candidate's existing experiences, projects, or bullets. Preserve everything they have.
+2. ADD as many new bullets as needed to hit 85%+ - you may add 2-3 extra bullets per experience/project. Weave missing keywords into NEW bullets. Incorporate synonyms and related terms: NoSQL/relational→databases, Kafka→messaging systems, LlamaIndex/Haystack→RAG/LLM libraries/vector, TensorFlow→PyTorch/ML frameworks, etc. If they use Python for ML, add TensorFlow/LLM libraries where it fits. Every blue/missing keyword that can reasonably fit MUST be woven in.
+3. Be realistic: no exaggerated claims (e.g., "saved $20M"). Use credible metrics.
+4. Every bullet: XYZ format. Accomplished [X] as measured by [Y], by doing [Z].
+
+OUTPUT RULES - NO INTERNAL THINKING:
+- Output ONLY the final clean data. NEVER include reasoning, inference notes, or chain-of-thought in any JSON field.
+- For contact.github: Use the GitHub URL provided below EXACTLY. Do NOT infer or guess. If provided, copy it verbatim. If not provided, use empty string.
+- For education: Use the EDUCATION data from USER BACKGROUND exactly. If education was provided, output it. If "None provided", omit education or use empty strings. For any missing field use [Placeholder?]. NEVER output reasoning.
+
+=== USER BACKGROUND ===
+Name: ${userName}
+Email: ${userEmail}
+${userGithub ? `GitHub (use this EXACT URL, do not change): ${userGithub}` : 'GitHub: (not provided - leave empty)'}
+
+EDUCATION (use this data exactly for the education section; do NOT infer or invent):
+${eduText}
+
+PROFESSIONAL EXPERIENCES:
+${expText || 'None'}
+
+PROJECTS:
+${projText || 'None'}
+
+ALL SKILLS: ${skillsVisualization.all_skills.join(', ')}
+
+=== TARGET JOB ===
+Title: ${job.title}
+Company: ${job.company}
+Keywords to incorporate: ${keywords.join(', ')}
+What looks good (leverage this): ${whatLooksGood}
+What is missing (address gaps): ${whatIsMissing}
+
+Job Description:
+${job.description}
+
+Return valid JSON. Use exact keys. NO reasoning in any field. For education: use [Placeholder?] for uncertain values.
+{
+  "contact": { "name": "string", "email": "string", "github": "exact URL from above or empty" },
+  "summary": "2-3 sentence tailored summary",
+  "experiences": [
+    { "company": "string", "title": "string", "location": "string", "dates": "string", "bullets": ["XYZ bullet", "..."] }
+  ],
+  "projects": [
+    { "name": "string", "type": "string", "dates": "string", "bullets": ["XYZ bullet", "..."] }
+  ],
+  "skills": ["skill1", "skill2"],
+  "education": { "school": "string", "degree": "string", "major": "string", "year": "string (use [Year?] if uncertain)" }
+}
+You may add up to 5-6 bullets per experience/project to hit keyword target. Ensure 1-page fit.`;
+
+  try {
+    const response = await ai.models.generateContent({
+      model: 'gemini-3-pro-preview',
+      contents: prompt,
+      config: {
+        responseMimeType: 'application/json',
+        responseSchema: {
+          type: Type.OBJECT,
+          properties: {
+            contact: {
+              type: Type.OBJECT,
+              properties: {
+                name: { type: Type.STRING },
+                email: { type: Type.STRING },
+                github: { type: Type.STRING }
+              },
+              required: ['name', 'email']
+            },
+            summary: { type: Type.STRING },
+            experiences: {
+              type: Type.ARRAY,
+              items: {
+                type: Type.OBJECT,
+                properties: {
+                  company: { type: Type.STRING },
+                  title: { type: Type.STRING },
+                  location: { type: Type.STRING },
+                  dates: { type: Type.STRING },
+                  bullets: { type: Type.ARRAY, items: { type: Type.STRING } }
+                },
+                required: ['company', 'title', 'dates', 'bullets']
+              }
+            },
+            projects: {
+              type: Type.ARRAY,
+              items: {
+                type: Type.OBJECT,
+                properties: {
+                  name: { type: Type.STRING },
+                  type: { type: Type.STRING },
+                  dates: { type: Type.STRING },
+                  bullets: { type: Type.ARRAY, items: { type: Type.STRING } }
+                },
+                required: ['name', 'bullets']
+              }
+            },
+            skills: { type: Type.ARRAY, items: { type: Type.STRING } },
+            education: {
+              type: Type.OBJECT,
+              properties: {
+                school: { type: Type.STRING },
+                degree: { type: Type.STRING },
+                major: { type: Type.STRING },
+                year: { type: Type.STRING }
+              }
+            }
+          },
+          required: ['contact', 'summary', 'experiences', 'projects', 'skills']
+        }
+      }
+    });
+    const rawText = response.text?.trim() || '{}';
+    let parsed: any = {};
+    try {
+      const jsonMatch = rawText.match(/\{[\s\S]*\}/);
+      parsed = JSON.parse(jsonMatch ? jsonMatch[0] : rawText);
+    } catch (e) {
+      console.error('generateTailoredResume JSON parse error:', e);
+      throw new Error('Failed to parse resume response');
+    }
+    return {
+      contact: {
+        name: parsed.contact?.name || userName,
+        email: parsed.contact?.email || userEmail,
+        github: parsed.contact?.github || userGithub || ''
+      },
+      summary: parsed.summary || '',
+      experiences: Array.isArray(parsed.experiences) ? parsed.experiences : [],
+      projects: Array.isArray(parsed.projects) ? parsed.projects : [],
+      skills: Array.isArray(parsed.skills) ? parsed.skills : [],
+      education: parsed.education
+    };
+  } catch (error) {
+    console.error('generateTailoredResume error:', error);
+    throw error;
   }
 }
 

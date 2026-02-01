@@ -7,15 +7,25 @@ interface JobCardProps {
   onClick: () => void;
   onTrack?: () => void;
   isTracked?: boolean;
+  onRemove?: () => void;  // When provided, shows red X on hover to remove from board
 }
 
-const JobCard: React.FC<JobCardProps> = ({ job, onClick, onTrack, isTracked }) => {
+const JobCard: React.FC<JobCardProps> = ({ job, onClick, onTrack, isTracked, onRemove }) => {
   const hasLogo = !!job.logo && job.logo.startsWith('http');
   return (
     <div 
       onClick={onClick}
       className="bg-white rounded-[2rem] p-6 mb-6 shadow-sm hover:shadow-lg transition-all cursor-pointer group flex items-center justify-between border border-transparent hover:border-indigo-100 relative overflow-hidden"
     >
+      {onRemove && (
+        <button
+          onClick={(e) => { e.stopPropagation(); onRemove(); }}
+          className="absolute top-4 right-4 w-9 h-9 rounded-lg bg-rose-500 text-white flex items-center justify-center opacity-0 group-hover:opacity-100 hover:bg-rose-600 transition-all z-10"
+          title="Remove from board"
+        >
+          <i className="fa-solid fa-xmark text-sm"></i>
+        </button>
+      )}
       <div className="flex items-center gap-6">
         <div className="w-16 h-16 rounded-2xl bg-black overflow-hidden flex items-center justify-center p-3 group-hover:scale-105 transition-transform">
           {hasLogo ? (

@@ -1,5 +1,5 @@
 import React, { useState, useMemo, useEffect } from 'react';
-import { SkillsVisualization, ProfessionalExperience, Project, AwardCertificatePublication } from '../types';
+import { SkillsVisualization, ProfessionalExperience, Project, AwardCertificatePublication, EducationEntry } from '../types';
 import { FileMetadata, saveSkillsVisualization } from '../services/firestoreService';
 
 interface VisualizeSkillsPageProps {
@@ -17,12 +17,18 @@ const VisualizeSkillsPage: React.FC<VisualizeSkillsPageProps> = ({ data, resumeF
   const [hoveredSkill, setHoveredSkill] = useState<{ skill: string; evidence: string[]; x: number; y: number } | null>(null);
   
   // Editable state - start with a deep copy of the data
-  const [editableData, setEditableData] = useState<SkillsVisualization>(() => JSON.parse(JSON.stringify(data)));
+  const [editableData, setEditableData] = useState<SkillsVisualization>(() => {
+    const cloned = JSON.parse(JSON.stringify(data));
+    if (!cloned.education_entries) cloned.education_entries = [];
+    return cloned;
+  });
   const [isSaving, setIsSaving] = useState(false);
   
-  // Update editable data when prop data changes
+  // Update editable data when prop data changes (ensure education_entries exists for backward compat)
   useEffect(() => {
-    setEditableData(JSON.parse(JSON.stringify(data)));
+    const cloned = JSON.parse(JSON.stringify(data));
+    if (!cloned.education_entries) cloned.education_entries = [];
+    setEditableData(cloned);
   }, [data]);
   
   // Update all_skills whenever skills are modified
@@ -502,6 +508,15 @@ const VisualizeSkillsPage: React.FC<VisualizeSkillsPageProps> = ({ data, resumeF
   };
 
   // Add skill to all_skills section
+  const updateEducationEntry = (id: string, field: keyof EducationEntry, value: string) => {
+    setEditableData(prev => ({
+      ...prev,
+      education_entries: (prev.education_entries || []).map(ed =>
+        ed.id === id ? { ...ed, [field]: value } : ed
+      )
+    }));
+  };
+
   const addToAllSkills = (skillName: string) => {
     if (skillName.trim() && !editableData.all_skills.includes(skillName.trim())) {
       setEditableData(prev => ({
@@ -662,6 +677,89 @@ const VisualizeSkillsPage: React.FC<VisualizeSkillsPageProps> = ({ data, resumeF
               ))}
             </div>
           </div>
+        )}
+
+        {/* Education - above Professional Experiences */}
+        {(editableData.education_entries?.length ?? 0) > 0 && (
+          <section className="bg-white rounded-[2.5rem] p-8 shadow-sm border border-slate-100 mb-8">
+            <h2 className="text-2xl font-extrabold text-[#1a1a3a] mb-6">
+              Education ({(editableData.education_entries || []).length})
+            </h2>
+            <div className="space-y-6">
+              {(editableData.education_entries || []).map((ed: EducationEntry) => (
+                <div key={ed.id} className="border-2 border-slate-200 rounded-2xl p-6 hover:border-indigo-300 transition-all">
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                    <div>
+                      <label className="text-xs font-black text-slate-400 uppercase tracking-widest block mb-1">School</label>
+                      <input
+                        type="text"
+                        value={ed.school}
+                        onChange={(e) => updateEducationEntry(ed.id, 'school', e.target.value)}
+                        className="w-full p-3 rounded-xl border border-slate-200 text-slate-900 font-medium focus:ring-2 focus:ring-indigo-200 focus:border-indigo-400"
+                        placeholder="University name"
+                      />
+                    </div>
+                    <div>
+                      <label className="text-xs font-black text-slate-400 uppercase tracking-widest block mb-1">Degree</label>
+                      <input
+                        type="text"
+                        value={ed.degree}
+                        onChange={(e) => updateEducationEntry(ed.id, 'degree', e.target.value)}
+                        className="w-full p-3 rounded-xl border border-slate-200 text-slate-900 font-medium focus:ring-2 focus:ring-indigo-200 focus:border-indigo-400"
+                        placeholder="e.g. B.S., M.S."
+                      />
+                    </div>
+                    <div>
+                      <label className="text-xs font-black text-slate-400 uppercase tracking-widest block mb-1">Major</label>
+                      <input
+                        type="text"
+                        value={ed.major || ''}
+                        onChange={(e) => updateEducationEntry(ed.id, 'major', e.target.value)}
+                        className="w-full p-3 rounded-xl border border-slate-200 text-slate-900 font-medium focus:ring-2 focus:ring-indigo-200 focus:border-indigo-400"
+                        placeholder="e.g. Computer Science"
+                      />
+                    </div>
+                    <div>
+                      <label className="text-xs font-black text-slate-400 uppercase tracking-widest block mb-1">Year</label>
+                      <input
+                        type="text"
+                        value={ed.year}
+                        onChange={(e) => updateEducationEntry(ed.id, 'year', e.target.value)}
+                        className="w-full p-3 rounded-xl border border-slate-200 text-slate-900 font-medium focus:ring-2 focus:ring-indigo-200 focus:border-indigo-400"
+                        placeholder="e.g. 2024"
+                      />
+                    </div>
+                    <div>
+                      <label className="text-xs font-black text-slate-400 uppercase tracking-widest block mb-1">GPA (optional)</label>
+                      <input
+                        type="text"
+                        value={ed.gpa || ''}
+                        onChange={(e) => updateEducationEntry(ed.id, 'gpa', e.target.value)}
+                        className="w-full p-3 rounded-xl border border-slate-200 text-slate-900 font-medium focus:ring-2 focus:ring-indigo-200 focus:border-indigo-400"
+                        placeholder="e.g. 3.8"
+                      />
+                    </div>
+                  </div>
+                  {ed.source_names?.length > 0 && (
+                    <div className="text-xs text-slate-400 mt-4">
+                      <span className="font-semibold">Sources: </span>
+                      <span className="flex flex-wrap gap-1.5">
+                        {ed.source_names.map((sourceName, idx) => {
+                          const sourceInfo = getSourceInfo(sourceName);
+                          return (
+                            <a key={idx} href={sourceInfo.url} target="_blank" rel="noopener noreferrer" className="text-indigo-600 hover:underline">
+                              {sourceInfo.name}
+                              {idx < ed.source_names.length - 1 && ','}
+                            </a>
+                          );
+                        })}
+                      </span>
+                    </div>
+                  )}
+                </div>
+              ))}
+            </div>
+          </section>
         )}
 
         {/* Professional Experiences */}
