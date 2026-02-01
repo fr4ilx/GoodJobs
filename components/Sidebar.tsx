@@ -8,18 +8,49 @@ interface SidebarProps {
   onSignOut: () => void;
 }
 
-const Sidebar: React.FC<SidebarProps> = ({ activeItem, onNavigate, onSignOut }) => {
-  const items: Array<{ name: NavItem; icon: string; displayName: string }> = [
-    { name: NavItem.Jobs, icon: 'fa-briefcase', displayName: 'Jobs' },
-    { name: NavItem.Track, icon: 'fa-list-check', displayName: 'Track & Connect' },
-    { name: NavItem.Connect, icon: 'fa-comments', displayName: 'Connect' },
-    { name: NavItem.Resume, icon: 'fa-file-lines', displayName: 'Resume & Projects' },
-    { name: NavItem.VisualizeSkills, icon: 'fa-diagram-project', displayName: 'Visualize Skills' },
-    { name: NavItem.Profile, icon: 'fa-circle-user', displayName: 'Profile' },
-  ];
+const BLOCK_1: Array<{ name: NavItem; icon: string; displayName: string }> = [
+  { name: NavItem.Resume, icon: 'fa-file-lines', displayName: 'Resume & Projects' },
+  { name: NavItem.VisualizeSkills, icon: 'fa-diagram-project', displayName: 'Visualize Skills' },
+  { name: NavItem.Profile, icon: 'fa-circle-user', displayName: 'Profile' },
+];
 
+const BLOCK_2: Array<{ name: NavItem; icon: string; displayName: string }> = [
+  { name: NavItem.Jobs, icon: 'fa-briefcase', displayName: 'Jobs' },
+  { name: NavItem.Track, icon: 'fa-table-columns', displayName: 'Current Progress' },
+  { name: NavItem.Customize, icon: 'fa-pen-nib', displayName: 'Customize' },
+  { name: NavItem.Connect, icon: 'fa-comments', displayName: 'Connect' },
+];
+
+const NavBlock: React.FC<{
+  items: Array<{ name: NavItem; icon: string; displayName: string }>;
+  activeItem: NavItem;
+  onNavigate: (item: NavItem) => void;
+}> = ({ items, activeItem, onNavigate }) => (
+  <div className="rounded-[1.75rem] bg-gradient-to-b from-slate-50 to-slate-100/50 border border-slate-200/60 p-3 shadow-[inset_0_1px_0_0_rgba(255,255,255,0.8)]">
+    {items.map((item) => (
+      <button
+        key={item.name}
+        onClick={() => onNavigate(item.name)}
+        className={`w-full flex items-center gap-3 px-3.5 py-2.5 rounded-xl text-sm font-semibold transition-all duration-200 group ${
+          activeItem === item.name
+            ? 'bg-white text-indigo-600 shadow-md border border-indigo-100/80'
+            : 'text-slate-500 hover:bg-white/70 hover:text-slate-700 border border-transparent'
+        }`}
+      >
+        <span className={`w-8 h-8 rounded-lg flex items-center justify-center flex-shrink-0 transition-colors ${
+          activeItem === item.name ? 'bg-indigo-50 text-indigo-600' : 'bg-slate-100 text-slate-400 group-hover:bg-slate-200'
+        }`}>
+          <i className={`fa-solid ${item.icon} text-sm`}></i>
+        </span>
+        {item.displayName}
+      </button>
+    ))}
+  </div>
+);
+
+const Sidebar: React.FC<SidebarProps> = ({ activeItem, onNavigate, onSignOut }) => {
   return (
-    <aside className="w-64 bg-white border-r border-slate-200 flex flex-col h-screen fixed top-0 left-0 z-50">
+    <aside className="w-72 bg-white border-r border-slate-200 flex flex-col h-screen fixed top-0 left-0 z-50">
       <div className="p-8 flex items-center gap-3">
         <div className="bg-indigo-600 rounded-xl p-2.5 shadow-lg shadow-indigo-100">
           <svg className="w-6 h-6 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -32,30 +63,13 @@ const Sidebar: React.FC<SidebarProps> = ({ activeItem, onNavigate, onSignOut }) 
         </div>
       </div>
 
-      <nav className="flex-1 px-4 mt-6">
-        <ul className="space-y-1">
-          {items.map((item) => (
-            <li key={item.name}>
-              <button
-                onClick={() => onNavigate(item.name)}
-                className={`w-full flex items-center gap-4 px-4 py-3.5 rounded-xl text-sm font-semibold transition-all duration-200 group ${
-                  activeItem === item.name
-                    ? 'bg-indigo-50 text-indigo-600 border-r-4 border-indigo-600 rounded-r-none'
-                    : 'text-slate-400 hover:bg-slate-50 hover:text-slate-600'
-                }`}
-              >
-                <span className="w-5 flex-shrink-0 flex items-center justify-center">
-                  <i className={`fa-solid ${item.icon} text-lg transition-transform duration-200 group-hover:scale-110 ${activeItem === item.name ? 'text-indigo-600' : 'text-slate-300'}`}></i>
-                </span>
-                {item.displayName}
-              </button>
-            </li>
-          ))}
-        </ul>
+      <nav className="flex-1 px-4 mt-6 space-y-6 overflow-y-auto">
+        <NavBlock items={BLOCK_1} activeItem={activeItem} onNavigate={onNavigate} />
+        <NavBlock items={BLOCK_2} activeItem={activeItem} onNavigate={onNavigate} />
       </nav>
 
       <div className="p-6 mt-auto space-y-3">
-        <div className="bg-gradient-to-br from-indigo-600 to-purple-600 rounded-[2rem] p-5 text-white shadow-xl">
+        <div className="rounded-[1.75rem] bg-gradient-to-br from-indigo-600 to-purple-600 p-5 text-white shadow-xl border border-indigo-500/20 shadow-indigo-200/30">
           <p className="text-[9px] font-black uppercase tracking-widest opacity-80 mb-1.5">Current Plan</p>
           <h3 className="text-lg font-black mb-0.5">Premium</h3>
           <p className="text-[10px] opacity-80 font-medium mb-3">Unlimited AI matching</p>
@@ -64,7 +78,6 @@ const Sidebar: React.FC<SidebarProps> = ({ activeItem, onNavigate, onSignOut }) 
           </button>
         </div>
         
-        {/* Sign Out Button */}
         <button 
           onClick={onSignOut}
           className="w-full bg-rose-50 text-rose-600 py-3 rounded-[1.5rem] font-bold text-sm hover:bg-rose-100 active:scale-95 transition-all flex items-center justify-center gap-2 border-2 border-rose-100 shadow-sm"

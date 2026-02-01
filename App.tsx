@@ -11,10 +11,10 @@ import ResumeUploadPage from './components/ResumeUploadPage';
 import JobDetailModal from './components/JobDetailModal';
 import PreferencesModal from './components/PreferencesModal';
 import VisualizeSkillsPage from './components/VisualizeSkillsPage';
-import { calculateMatchScore, analyzeSkills, validateGeminiApiKey, generateCustomizedResume, findRecruiters, generateOutreachEmail } from './services/geminiService';
+import { calculateMatchScore, analyzeSkills, validateGeminiApiKey, generateCustomizedResume, findRecruiters, generateOutreachEmail, extractJobKeywordsBatch, generateJobFitAnalysisBatch } from './services/geminiService';
 import { useAuth } from './contexts/AuthContext';
 import { logOut } from './services/authService';
-import { saveUserPreferences, saveResumeData, saveUserProfile, getUserProfile, deleteResumeFile, deleteProjectFile, deleteProjectLink, FileMetadata, saveSkillsVisualization } from './services/firestoreService';
+import { saveUserPreferences, saveResumeData, saveUserProfile, getUserProfile, deleteResumeFile, deleteProjectFile, deleteProjectLink, FileMetadata, saveSkillsVisualization, seedJobsIfEmpty, getJobs, getJobAnalyses, saveJobAnalysis } from './services/firestoreService';
 import { fetchJobsWithFilters } from './services/apifyService';
 
 import { MOCK_JOBS } from './constants';
@@ -33,7 +33,7 @@ const STAGES: { label: string; key: TrackStatus; color: string; bg: string; icon
   { label: 'Customize', key: 'Customize', color: 'text-orange-600', bg: 'bg-orange-50', accent: 'bg-orange-500', icon: 'fa-pen-nib', desc: 'Tailor your resume and cover letter.' },
   { label: 'Connect', key: 'Connect', color: 'text-emerald-600', bg: 'bg-emerald-50', accent: 'bg-emerald-500', icon: 'fa-comments', desc: 'Find and reach out to stakeholders.' },
   { label: 'Apply', key: 'Apply', color: 'text-blue-600', bg: 'bg-blue-50', accent: 'bg-blue-500', icon: 'fa-paper-plane', desc: 'Submit application and track status.' },
-  { label: 'Done', key: 'Done', color: 'text-slate-600', bg: 'bg-slate-50', accent: 'bg-slate-800', icon: 'fa-circle-check', desc: 'Applications completed.' },
+  { label: 'Done', key: 'Done', color: 'text-pink-700', bg: 'bg-pink-100', accent: 'bg-pink-600', icon: 'fa-circle-check', desc: 'Applications completed.' },
 ];
 
 const App: React.FC = () => {
@@ -66,6 +66,7 @@ const App: React.FC = () => {
   const [isAnalyzingSkills, setIsAnalyzingSkills] = useState(false);
   const [isValidatingApiKey, setIsValidatingApiKey] = useState(false);
   const [apiKeyValidationResult, setApiKeyValidationResult] = useState<{ valid: boolean; error?: string } | null>(null); 
+  const [isGettingMatchingScore, setIsGettingMatchingScore] = useState(false);
   
   const [jobs, setJobs] = useState<Job[]>([]);
   const [jobsLoading, setJobsLoading] = useState(false);
@@ -184,7 +185,7 @@ const App: React.FC = () => {
     }
   }, [currentUser]);
 
-  // Load jobs from Apify when user completes onboarding
+  // Load jobs from Firestore when user completes onboarding
   useEffect(() => {
     const loadJobs = async () => {
       if (!currentUser || !isPreferencesComplete || !isResumeComplete) {
@@ -193,47 +194,30 @@ const App: React.FC = () => {
 
       try {
         setJobsLoading(true);
-        setJobsLoadingStatus('Loading test jobs...');
+        setJobsLoadingStatus('Loading jobs...');
 
-        // Use MOCK_JOBS for testing
-        setJobs(MOCK_JOBS);
+        await seedJobsIfEmpty(MOCK_JOBS);
+        const firestoreJobs = await getJobs();
+        const jobsToShow = firestoreJobs.length > 0 ? firestoreJobs : MOCK_JOBS;
+        const analyses: Record<string, import('./types').JobAnalysis> = await getJobAnalyses(currentUser.uid).catch(() => ({}));
+
+        const merged = jobsToShow.map((job) => ({
+          ...job,
+          analysis: analyses[job.id]
+        })) as Job[];
+        setJobs(merged);
         setJobsLoadingStatus('');
-
-        // Uncomment below to use real Apify jobs instead:
-        // const fetchedJobs = await fetchJobsWithFilters(
-        //   {
-        //     jobTitle: userProfile.preferences?.jobTitle,
-        //     location: userProfile.preferences?.location,
-        //     workType: userProfile.preferences?.workType,
-        //     yearsOfExperience: userProfile.preferences?.yearsOfExperience,
-        //     contractType: userProfile.preferences?.contractType
-        //   },
-        //   (status) => setJobsLoadingStatus(status)
-        // );
-        // setJobs(fetchedJobs);
       } catch (error) {
-        console.error('Error loading jobs from Apify:', error);
-        const errorMessage = error instanceof Error ? error.message : 'Failed to load jobs';
-        setJobsLoadingStatus(`Error: ${errorMessage}`);
-        
-        // Show user-friendly error alert
-        if (errorMessage.includes('VITE_APIFY_TOKEN')) {
-          alert('Missing Apify API Token!\n\nPlease add VITE_APIFY_TOKEN to your .env.local file.\n\nSee APIFY_SETUP.md for instructions.');
-        } else {
-          console.error('Full error details:', error);
-        }
-        
-        // Keep existing jobs or set empty array
-        if (jobs.length === 0) {
-          setJobs([]);
-        }
+        console.error('Error loading jobs:', error);
+        setJobsLoadingStatus(`Error: ${error instanceof Error ? error.message : 'Failed to load jobs'}`);
+        setJobs(MOCK_JOBS);
       } finally {
         setJobsLoading(false);
       }
     };
 
     loadJobs();
-  }, [currentUser, isPreferencesComplete, isResumeComplete, userProfile.preferences]);
+  }, [currentUser, isPreferencesComplete, isResumeComplete]);
 
   const trackStoragePrefix = () => `goodjobs_track_${currentUser?.uid || 'anon'}_`;
   useEffect(() => {
@@ -478,6 +462,62 @@ const App: React.FC = () => {
     }
   };
 
+  const handleGetMatchingScore = async () => {
+    if (!currentUser || !skillsVisualization) {
+      alert('Please complete your Visualize Skills analysis first. Save your resume data and run the skills analysis.');
+      return;
+    }
+    if (jobs.length === 0) {
+      alert('No jobs to analyze.');
+      return;
+    }
+    setIsGettingMatchingScore(true);
+    try {
+      const mySkillsSet = new Set(skillsVisualization.all_skills.map(s => s.toLowerCase().trim()));
+      const keywordInputs = jobs.map(j => ({
+        jobId: j.id,
+        title: j.title,
+        company: j.company,
+        description: j.description
+      }));
+      const keywordMap = await extractJobKeywordsBatch(keywordInputs);
+      const fitInputs = jobs.map(j => {
+        const keywords = keywordMap[j.id] || [];
+        const matched = keywords.filter(k => mySkillsSet.has(k.toLowerCase().trim()));
+        return {
+          jobId: j.id,
+          title: j.title,
+          company: j.company,
+          keywords,
+          mySkills: skillsVisualization.all_skills,
+          matchedKeywords: matched
+        };
+      });
+      const fitMap = await generateJobFitAnalysisBatch(fitInputs, skillsVisualization);
+      const newAnalyses: Record<string, import('./types').JobAnalysis> = {};
+      for (const j of jobs) {
+        const fit = fitMap[j.id];
+        const keywords = keywordMap[j.id] || [];
+        const matched = keywords.filter(k => mySkillsSet.has(k.toLowerCase().trim()));
+        const score = keywords.length > 0 ? Math.round((matched.length / keywords.length) * 100) : 0;
+        const analysis: import('./types').JobAnalysis = {
+          keywords,
+          keywordMatchScore: score,
+          whatLooksGood: fit?.whatLooksGood || '',
+          whatIsMissing: fit?.whatIsMissing || ''
+        };
+        newAnalyses[j.id] = analysis;
+        await saveJobAnalysis(currentUser.uid, j.id, analysis);
+      }
+      setJobs(prev => prev.map(job => ({ ...job, analysis: newAnalyses[job.id] ?? job.analysis })));
+    } catch (error) {
+      console.error('Get matching score error:', error);
+      alert(`Failed to compute matching scores: ${error instanceof Error ? error.message : 'Unknown error'}`);
+    } finally {
+      setIsGettingMatchingScore(false);
+    }
+  };
+
   const handleSignOut = async () => {
     try {
       await logOut();
@@ -510,45 +550,29 @@ const App: React.FC = () => {
       // Close the modal
       setShowPreferencesModal(false);
       
-      // Clear existing jobs to show loading state
+      // Reload jobs from Firestore (fallback to MOCK_JOBS if Firestore fails)
       setJobs([]);
-      
-      // Use MOCK_JOBS for testing
       setJobsLoading(true);
-      setJobsLoadingStatus('Loading test jobs...');
-      
+      setJobsLoadingStatus('Loading jobs...');
       try {
-        // Use MOCK_JOBS for testing
-        setJobs(MOCK_JOBS);
+        let firestoreJobs: Job[] = [];
+        try {
+          await seedJobsIfEmpty(MOCK_JOBS);
+          firestoreJobs = await getJobs();
+        } catch (fsError) {
+          console.warn('Firestore jobs load failed:', fsError);
+        }
+        const jobsToShow = firestoreJobs.length > 0 ? firestoreJobs : MOCK_JOBS;
+        const analyses: Record<string, import('./types').JobAnalysis> = currentUser ? await getJobAnalyses(currentUser.uid).catch(() => ({})) : {};
+        const merged = jobsToShow.map((job) => ({
+          ...job,
+          analysis: analyses[job.id]
+        })) as Job[];
+        setJobs(merged);
         setJobsLoadingStatus('');
-        
-        // Uncomment below to use real Apify jobs instead:
-        // const fetchedJobs = await fetchJobsWithFilters(
-        //   {
-        //     jobTitle: newPrefs.jobTitle,
-        //     location: newPrefs.location,
-        //     workType: newPrefs.workType,
-        //     yearsOfExperience: newPrefs.yearsOfExperience,
-        //     contractType: newPrefs.contractType
-        //   },
-        //   (status) => {
-        //     console.log('📊 Progress update:', status);
-        //     setJobsLoadingStatus(status);
-        //   }
-        // );
-        // setJobs(fetchedJobs);
       } catch (error) {
         console.error('❌ Error reloading jobs:', error);
-        const errorMessage = error instanceof Error ? error.message : 'Failed to reload jobs';
-        setJobsLoadingStatus(`Error: ${errorMessage}`);
-        
-        // Show user-friendly error alert
-        if (errorMessage.includes('VITE_APIFY_TOKEN')) {
-          alert('Missing Apify API Token!\n\nPlease add VITE_APIFY_TOKEN to your .env.local file.\n\nSee APIFY_SETUP.md for instructions.');
-        } else {
-          alert(`Failed to load jobs: ${errorMessage}\n\nCheck the console for more details.`);
-        }
-        // Keep existing jobs if there was an error
+        setJobs(MOCK_JOBS);
       } finally {
         setJobsLoading(false);
       }
@@ -586,12 +610,13 @@ const App: React.FC = () => {
     setAnalysisProgress(null);
   }, [jobs, userProfile.resumeContent]);
 
-  useEffect(() => {
-    if (currentUser && isPreferencesComplete && isResumeComplete && jobs.length > 0 && !jobsLoading) {
-      runAnalysis();
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [currentUser, isPreferencesComplete, isResumeComplete, jobs.length, jobsLoading]);
+  // Disabled: old AI match score that progressively updated to 0.
+  // Matching scores now come only from "Get matching score" (keyword-based).
+  // useEffect(() => {
+  //   if (currentUser && isPreferencesComplete && isResumeComplete && jobs.length > 0 && !jobsLoading) {
+  //     runAnalysis();
+  //   }
+  // }, [currentUser, isPreferencesComplete, isResumeComplete, jobs.length, jobsLoading]);
 
   const filteredJobs = useMemo(() => {
     // Since the API already filters by preferences, just return all jobs
@@ -602,8 +627,10 @@ const App: React.FC = () => {
 
   const sortedJobs = useMemo(() => {
     return [...filteredJobs].sort((a, b) => {
-      if (sortBy === 'score-desc') return (b.matchScore ?? 0) - (a.matchScore ?? 0);
-      if (sortBy === 'score-asc') return (a.matchScore ?? 0) - (b.matchScore ?? 0);
+      const scoreA = a.analysis?.keywordMatchScore ?? a.matchScore ?? -1;
+      const scoreB = b.analysis?.keywordMatchScore ?? b.matchScore ?? -1;
+      if (sortBy === 'score-desc') return scoreB - scoreA;
+      if (sortBy === 'score-asc') return scoreA - scoreB;
       return parseInt(b.id, 10) - parseInt(a.id, 10);
     });
   }, [filteredJobs, sortBy]);
@@ -920,7 +947,7 @@ const App: React.FC = () => {
 
   const handleNavigate = (nav: NavItem) => {
     setActiveTrackStage(null);
-    if (nav !== NavItem.Track) {
+    if (nav !== NavItem.Track && nav !== NavItem.Customize) {
       setCustomizingJob(null);
       setConnectingJob(null);
       setViewingDraft(null);
@@ -932,7 +959,7 @@ const App: React.FC = () => {
     <div className="min-h-screen bg-[#f8f9fe] animate-in fade-in duration-1000">
       <Sidebar activeItem={activeNav} onNavigate={handleNavigate} onSignOut={handleSignOut} />
 
-      <main className="ml-64 p-12 max-w-7xl mx-auto">
+      <main className={`ml-72 p-12 ${activeNav === NavItem.Track || activeNav === NavItem.Customize ? 'w-[calc(100vw-18rem)] max-w-none' : 'max-w-7xl mx-auto'}`}>
         {activeNav === NavItem.Jobs && (
           <section className="animate-in fade-in slide-in-from-bottom-4 duration-500 max-w-7xl mx-auto">
             <header className="mb-12">
@@ -951,17 +978,36 @@ const App: React.FC = () => {
                   </div>
                 </div>
               </div>
-              <div className="flex items-center gap-3 bg-white border border-slate-100 px-5 py-3 rounded-2xl shadow-sm w-fit">
-                <i className="fa-solid fa-arrow-down-short-wide text-slate-400 text-xs"></i>
-                <select
-                  value={sortBy}
-                  onChange={(e) => setSortBy(e.target.value as SortOption)}
-                  className="text-xs font-black text-slate-600 bg-transparent border-none outline-none appearance-none cursor-pointer uppercase tracking-widest"
+              <div className="flex items-center gap-3 flex-wrap w-full">
+                <div className="flex items-center gap-3 bg-white border border-slate-100 px-5 py-3 rounded-2xl shadow-sm">
+                  <i className="fa-solid fa-arrow-down-short-wide text-slate-400 text-xs"></i>
+                  <select
+                    value={sortBy}
+                    onChange={(e) => setSortBy(e.target.value as SortOption)}
+                    className="text-xs font-black text-slate-600 bg-transparent border-none outline-none appearance-none cursor-pointer uppercase tracking-widest"
+                  >
+                    <option value="score-desc">Best Match</option>
+                    <option value="score-asc">Lowest Match</option>
+                    <option value="newest">Recent</option>
+                  </select>
+                </div>
+                <button
+                  onClick={handleGetMatchingScore}
+                  disabled={isGettingMatchingScore || !skillsVisualization || jobs.length === 0}
+                  className="bg-indigo-600 text-white px-5 py-3 rounded-2xl font-black text-xs uppercase tracking-widest flex items-center gap-2 hover:bg-indigo-700 disabled:opacity-50 disabled:cursor-not-allowed shadow-lg shadow-indigo-100 transition-all ml-auto"
                 >
-                  <option value="score-desc">Best Match</option>
-                  <option value="score-asc">Lowest Match</option>
-                  <option value="newest">Recent</option>
-                </select>
+                  {isGettingMatchingScore ? (
+                    <>
+                      <i className="fa-solid fa-spinner animate-spin"></i>
+                      Processing...
+                    </>
+                  ) : (
+                    <>
+                      <i className="fa-solid fa-percent"></i>
+                      Get matching score
+                    </>
+                  )}
+                </button>
               </div>
             </header>
 
@@ -1019,7 +1065,7 @@ const App: React.FC = () => {
           </section>
         )}
 
-        {activeNav === NavItem.Track && (
+        {(activeNav === NavItem.Track || activeNav === NavItem.Customize) && (
           <section className="animate-in fade-in duration-500 h-full">
             {customizingJob ? (
               <div className="animate-in slide-in-from-right-12 duration-500 h-[calc(100vh-100px)] flex flex-col">
@@ -1171,174 +1217,66 @@ const App: React.FC = () => {
                   </div>
                 </div>
               </div>
-            ) : !activeTrackStage ? (
-              <>
-                <header className="mb-12">
-                  <p className="text-slate-400 font-bold mb-1 text-xs uppercase tracking-[0.3em]">Command Center</p>
-                  <h2 className="text-4xl font-black text-[#1a1a3a] tracking-tight leading-none">Your Application Pipeline</h2>
-                </header>
-                <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
-                  {STAGES.map((s) => (
-                    <button key={s.key} onClick={() => setActiveTrackStage(s.key)} className="group relative p-8 rounded-[2.5rem] text-left transition-all hover:scale-105 shadow-sm border border-slate-100 bg-white hover:shadow-2xl h-80 flex flex-col justify-between">
-                      <div className={`w-16 h-16 ${s.bg} ${s.color} rounded-2xl flex items-center justify-center text-2xl group-hover:scale-110 shadow-sm`}><i className={`fa-solid ${s.icon}`}></i></div>
-                      <div>
-                        <div className="flex items-end justify-between mb-2">
-                          <h3 className="text-3xl font-black text-slate-900 tracking-tight">{s.label}</h3>
-                          <span className="text-4xl font-black text-indigo-600/20 group-hover:text-indigo-600 transition-colors">{jobs.filter((j) => trackedJobs[j.id] === s.key).length}</span>
-                        </div>
-                        <p className="text-sm font-medium text-slate-400 leading-relaxed pr-4">{s.desc}</p>
-                      </div>
-                      <div className="absolute top-0 right-0 p-8 opacity-0 group-hover:opacity-100 transition-opacity"><i className="fa-solid fa-chevron-right text-indigo-400"></i></div>
-                    </button>
-                  ))}
-                </div>
-              </>
-            ) : activeTrackStage === 'Done' ? (
-              <div className="animate-in fade-in slide-in-from-right-12 duration-500 max-w-7xl mx-auto">
-                <button onClick={() => setActiveTrackStage(null)} className="mb-8 flex items-center gap-3 text-slate-400 hover:text-indigo-600 font-black text-xs uppercase tracking-widest transition-all group"><i className="fa-solid fa-arrow-left group-hover:-translate-x-1 transition-transform"></i>Back to Pipeline</button>
-                {(() => {
-                  const stageJobs = jobs.filter((j) => trackedJobs[j.id] === 'Done');
-                  return (
-                    <div className="space-y-8">
-                      <header className="flex items-center gap-6 mb-8">
-                        <div className="w-16 h-16 bg-slate-100 rounded-2xl flex items-center justify-center border border-slate-200">
-                          <i className="fa-solid fa-circle-check text-slate-600 text-2xl"></i>
-                        </div>
-                        <div>
-                          <h2 className="text-5xl font-black text-slate-900 tracking-tight leading-none mb-1">Neural Ledger</h2>
-                          <p className="text-slate-400 font-bold">{stageJobs.length} completed {stageJobs.length === 1 ? 'entry' : 'entries'}</p>
-                        </div>
-                      </header>
-                      
-                      <div className="bg-white rounded-[2rem] border border-slate-100 shadow-sm overflow-hidden">
-                        <div className="overflow-x-auto">
-                          <table className="w-full">
-                            <thead className="bg-slate-50 border-b border-slate-100">
-                              <tr>
-                                <th className="text-left py-4 px-6 text-[10px] font-black text-slate-400 uppercase tracking-widest">ROLE & COMPANY</th>
-                                <th className="text-left py-4 px-6 text-[10px] font-black text-slate-400 uppercase tracking-widest">CUSTOMIZATION</th>
-                                <th className="text-left py-4 px-6 text-[10px] font-black text-slate-400 uppercase tracking-widest">CONNECT (STAKEHOLDERS)</th>
-                                <th className="text-left py-4 px-6 text-[10px] font-black text-slate-400 uppercase tracking-widest">APPLY STATUS</th>
-                                <th className="text-left py-4 px-6 text-[10px] font-black text-slate-400 uppercase tracking-widest">DETAILS</th>
-                              </tr>
-                            </thead>
-                            <tbody className="divide-y divide-slate-50">
-                              {stageJobs.map((job) => {
-                                const hasCustomized = !!customizedResumes[job.id];
-                                const recruiters = jobRecruiters[job.id] || [];
-                                const hasRecruiters = recruiters.length > 0;
-                                return (
-                                  <tr key={job.id} className="hover:bg-slate-50/50 transition-colors">
-                                    <td className="py-5 px-6">
-                                      <div className="flex items-center gap-4">
-                                        <div className="w-12 h-12 rounded-xl bg-slate-50 border border-slate-100 flex items-center justify-center overflow-hidden">
-                                          {job.logo && job.logo.startsWith('http') ? (
-                                            <img src={job.logo} alt={job.company} className="w-full h-full object-cover" />
-                                          ) : (
-                                            <span className="text-slate-400 font-black text-lg">{job.company?.charAt(0) || '?'}</span>
-                                          )}
-                                        </div>
-                                        <div>
-                                          <p className="font-black text-slate-900 text-sm mb-0.5">{job.title}</p>
-                                          <p className="text-xs font-bold text-slate-400 uppercase tracking-wider">{job.company}</p>
-                                        </div>
-                                      </div>
-                                    </td>
-                                    <td className="py-5 px-6">
-                                      {hasCustomized ? (
-                                        <div className="w-8 h-8 bg-emerald-100 rounded-full flex items-center justify-center">
-                                          <i className="fa-solid fa-check text-emerald-600 text-xs"></i>
-                                        </div>
-                                      ) : (
-                                        <div className="w-8 h-8 bg-slate-100 rounded-full flex items-center justify-center">
-                                          <i className="fa-solid fa-minus text-slate-300 text-xs"></i>
-                                        </div>
-                                      )}
-                                    </td>
-                                    <td className="py-5 px-6">
-                                      {hasRecruiters ? (
-                                        <span className="text-xs font-bold text-slate-700">{recruiters.length} contact{recruiters.length !== 1 ? 's' : ''}</span>
-                                      ) : (
-                                        <span className="text-xs font-bold text-slate-300 uppercase">NO CONTACTS FOUND</span>
-                                      )}
-                                    </td>
-                                    <td className="py-5 px-6">
-                                      <span className="inline-block px-4 py-1.5 bg-rose-100 text-rose-700 rounded-full text-[10px] font-black uppercase tracking-wider">
-                                        NO (PENDING)
-                                      </span>
-                                    </td>
-                                    <td className="py-5 px-6">
-                                      <button
-                                        onClick={() => {
-                                          setSelectedJob(job);
-                                        }}
-                                        className="text-xs font-black uppercase tracking-widest text-indigo-600 hover:text-indigo-700 hover:underline transition-colors"
-                                      >
-                                        VIEW DETAILS
-                                      </button>
-                                    </td>
-                                  </tr>
-                                );
-                              })}
-                            </tbody>
-                          </table>
-                        </div>
-                        {stageJobs.length === 0 && (
-                          <div className="py-24 text-center border-t border-slate-100">
-                            <div className="w-20 h-20 bg-slate-50 rounded-full flex items-center justify-center text-slate-200 mx-auto mb-6">
-                              <i className="fa-solid fa-circle-check text-3xl"></i>
-                            </div>
-                            <h3 className="text-xl font-black text-slate-300 tracking-tight mb-2">No Completed Applications</h3>
-                            <p className="text-slate-400 font-bold">Move jobs to Done stage to see them in the Neural Ledger.</p>
-                          </div>
-                        )}
-                      </div>
-                    </div>
-                  );
-                })()}
-              </div>
             ) : (
-              <div className="animate-in fade-in slide-in-from-right-12 duration-500 max-w-7xl mx-auto">
-                <button onClick={() => setActiveTrackStage(null)} className="mb-8 flex items-center gap-3 text-slate-400 hover:text-indigo-600 font-black text-xs uppercase tracking-widest transition-all group"><i className="fa-solid fa-arrow-left group-hover:-translate-x-1 transition-transform"></i>Back to Pipeline</button>
-                {(() => {
-                  const s = STAGES.find((st) => st.key === activeTrackStage)!;
-                  const stageJobs = jobs.filter((j) => trackedJobs[j.id] === activeTrackStage);
-                  return (
-                    <div className="space-y-10">
-                      <header className="flex items-end gap-6">
-                        <div className={`w-20 h-20 ${s.bg} ${s.color} rounded-3xl flex items-center justify-center text-3xl shadow-lg border border-white/50`}><i className={`fa-solid ${s.icon}`}></i></div>
-                        <div>
-                          <h2 className="text-5xl font-black text-slate-900 tracking-tight leading-none mb-2">{s.label} Space</h2>
-                          <p className="text-slate-400 font-bold">{stageJobs.length} active application{stageJobs.length !== 1 ? 's' : ''}</p>
+              <div className="animate-in fade-in duration-500 w-full">
+                <header className="mb-8">
+                  <p className="text-slate-400 font-bold mb-1 text-xs uppercase tracking-[0.3em]">Application Board</p>
+                  <h2 className="text-3xl font-black text-[#1a1a3a] tracking-tight">Current Progress</h2>
+                  <p className="text-slate-500 text-sm mt-2">Jobs appear here when you click &quot;Track Job&quot; in the Jobs tab or the track button in a job detail.</p>
+                </header>
+                <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+                  {STAGES.map((s) => {
+                    const stageJobs = jobs.filter((j) => trackedJobs[j.id] === s.key);
+                    return (
+                      <div key={s.key} className={`flex flex-col rounded-2xl border border-slate-100 min-h-[500px] overflow-hidden flex-1 min-w-0 ${s.key === 'Done' ? 'bg-pink-50/60' : 'bg-slate-50/80'}`}>
+                        <div className={`px-5 py-4 ${s.bg} ${s.color} rounded-t-2xl border-b border-slate-100 flex items-center justify-center gap-2 relative`}>
+                          <i className={`fa-solid ${s.icon} text-lg`}></i>
+                          <h3 className="font-black text-slate-900 uppercase tracking-wider text-sm">{s.label}</h3>
+                          <span className="absolute right-4 bg-white/60 text-slate-700 font-black text-sm w-8 h-8 rounded-lg flex items-center justify-center">{stageJobs.length}</span>
                         </div>
-                      </header>
-                      <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-                        {stageJobs.map((job) => (
-                          <div
-                            key={job.id}
-                            onClick={() => { if (activeTrackStage === 'Customize') setCustomizingJob(job); if (activeTrackStage === 'Connect') setConnectingJob(job); }}
-                            className="bg-white p-8 rounded-[3rem] shadow-sm border border-slate-100 flex items-center justify-between group hover:border-indigo-100 transition-all cursor-pointer"
-                          >
-                            <div className="flex items-center gap-6">
-                              <div className="w-16 h-16 bg-slate-50 rounded-2xl flex items-center justify-center p-3 border border-slate-100">
-                                {job.logo && job.logo.startsWith('http') ? <img src={job.logo} alt="" className="w-full h-full object-contain" /> : <span className="text-slate-400 font-black text-xl">{job.company?.charAt(0) || '?'}</span>}
-                              </div>
-                              <div>
-                                <h4 className="text-xl font-black text-slate-900 tracking-tight mb-1">{job.title}</h4>
-                                <p className="text-xs font-black text-indigo-500 uppercase tracking-widest">{job.company}</p>
-                                <p className="text-[10px] font-bold text-slate-400 mt-2 flex items-center gap-2"><i className="fa-solid fa-door-open"></i> Enter {s.label} Workspace</p>
+                        <div className="flex-1 p-3 space-y-3 overflow-y-auto custom-scrollbar min-h-[400px]">
+                          {stageJobs.map((job) => (
+                            <div
+                              key={job.id}
+                              onClick={() => {
+                                if (s.key === 'Customize') setCustomizingJob(job);
+                                if (s.key === 'Connect') setConnectingJob(job);
+                                if (s.key === 'Apply' || s.key === 'Done') setSelectedJob(job);
+                              }}
+                              className="relative bg-white p-4 rounded-xl border border-slate-100 shadow-sm hover:border-indigo-200 hover:shadow-md transition-all cursor-pointer group"
+                            >
+                              <button
+                                onClick={(e) => { e.stopPropagation(); untrackJob(job.id); }}
+                                className="absolute top-2 right-2 w-8 h-8 rounded-lg bg-rose-500 text-white flex items-center justify-center opacity-0 group-hover:opacity-100 hover:bg-rose-600 transition-all z-10"
+                                title="Remove from pipeline"
+                              >
+                                <i className="fa-solid fa-xmark text-sm"></i>
+                              </button>
+                              <div className="flex items-start gap-3 pr-8">
+                                <div className="w-10 h-10 rounded-lg bg-slate-50 border border-slate-100 flex items-center justify-center flex-shrink-0 overflow-hidden">
+                                  {job.logo && job.logo.startsWith('http') ? <img src={job.logo} alt="" className="w-full h-full object-contain" /> : <span className="text-slate-400 font-black text-sm">{job.company?.charAt(0) || '?'}</span>}
+                                </div>
+                                <div className="flex-1 min-w-0">
+                                  <h4 className="font-bold text-slate-900 text-sm leading-tight line-clamp-2 group-hover:text-indigo-600 transition-colors">{job.title}</h4>
+                                  <p className="text-[10px] font-bold text-slate-400 uppercase tracking-wider mt-0.5 truncate">{job.company}</p>
+                                  {job.analysis?.keywordMatchScore !== undefined && (
+                                    <span className="inline-block mt-2 px-2 py-0.5 bg-indigo-50 text-indigo-600 rounded text-[10px] font-black">{job.analysis.keywordMatchScore}% match</span>
+                                  )}
+                                </div>
                               </div>
                             </div>
-                            <div className="flex gap-2">
-                              <button onClick={(e) => { e.stopPropagation(); untrackJob(job.id); }} className="w-12 h-12 bg-rose-50 text-rose-500 rounded-2xl flex items-center justify-center hover:bg-rose-500 hover:text-white transition-all shadow-sm"><i className="fa-solid fa-trash-can"></i></button>
-                              <button onClick={(e) => { e.stopPropagation(); const idx = STAGES.findIndex((st) => st.key === activeTrackStage); if (idx >= 0 && idx < STAGES.length - 1) moveJob(job.id, STAGES[idx + 1].key); }} className={`px-6 h-12 ${s.accent} text-white rounded-2xl font-black text-xs uppercase tracking-widest flex items-center gap-3 hover:opacity-90 shadow-xl transition-all`}>Next <i className="fa-solid fa-arrow-right"></i></button>
+                          ))}
+                          {stageJobs.length === 0 && (
+                            <div className="py-8 text-center text-slate-300">
+                              <i className={`fa-solid ${s.icon} text-2xl mb-2 block opacity-50`}></i>
+                              <p className="text-xs font-bold">No jobs</p>
                             </div>
-                          </div>
-                        ))}
+                          )}
+                        </div>
                       </div>
-                    </div>
-                  );
-                })()}
+                    );
+                  })}
+                </div>
               </div>
             )}
           </section>
@@ -1390,7 +1328,7 @@ const App: React.FC = () => {
                   </div>
                   <h3 className="text-2xl font-black text-slate-300 tracking-tight">No Active Connections</h3>
                   <p className="text-slate-400 font-bold mt-2 mb-8">Move jobs to the &apos;Connect&apos; stage to start building your network.</p>
-                  <button onClick={() => handleNavigate(NavItem.Track)} className="bg-indigo-600 text-white px-8 py-4 rounded-xl font-black text-xs uppercase tracking-widest shadow-xl shadow-indigo-100 hover:bg-indigo-700 transition-all">Go to Pipeline</button>
+                  <button onClick={() => handleNavigate(NavItem.Track)} className="bg-indigo-600 text-white px-8 py-4 rounded-xl font-black text-xs uppercase tracking-widest shadow-xl shadow-indigo-100 hover:bg-indigo-700 transition-all">Go to Current Progress</button>
                 </div>
               )}
             </div>
@@ -2055,10 +1993,10 @@ const App: React.FC = () => {
           onTrack={() => {
             trackJob(selectedJob.id);
             handleNavigate(NavItem.Track);
-            setActiveTrackStage('Customize');
             setSelectedJob(null);
           }}
           isTracked={!!trackedJobs[selectedJob.id]}
+          mySkills={skillsVisualization?.all_skills}
         />
       )}
 

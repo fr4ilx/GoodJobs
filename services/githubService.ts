@@ -37,7 +37,11 @@ export function parseGitHubUrl(url: string): GitHubRepoInfo | null {
     }
 
     const owner = parts[0];
-    const repo = parts[1];
+    let repo = parts[1];
+    // Strip .git suffix - GitHub API expects repo name without it
+    if (repo.endsWith('.git')) {
+      repo = repo.slice(0, -4);
+    }
     
     // Check if there's a path (tree/blob)
     let path: string | undefined;

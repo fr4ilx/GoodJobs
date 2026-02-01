@@ -9,6 +9,7 @@ interface SignInPageProps {
 const SignInPage: React.FC<SignInPageProps> = ({ onBack, onSwitchToSignUp }) => {
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
+  const [showPassword, setShowPassword] = useState(false);
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [showResetPassword, setShowResetPassword] = useState(false);
@@ -201,13 +202,21 @@ const SignInPage: React.FC<SignInPageProps> = ({ onBack, onSwitchToSignUp }) => 
                 <div className="relative">
                   <i className="fa-solid fa-lock absolute left-4 top-1/2 -translate-y-1/2 text-slate-300"></i>
                   <input 
-                    type="password" 
+                    type={showPassword ? 'text' : 'password'}
                     required 
                     value={password}
                     onChange={(e) => setPassword(e.target.value)}
-                    className="w-full bg-slate-50 border border-slate-100 rounded-2xl py-4 pl-12 pr-4 text-slate-900 font-bold placeholder:text-slate-300 focus:bg-white focus:ring-2 focus:ring-indigo-100 focus:border-indigo-600 outline-none transition-all" 
+                    className="w-full bg-slate-50 border border-slate-100 rounded-2xl py-4 pl-12 pr-12 text-slate-900 font-bold placeholder:text-slate-300 focus:bg-white focus:ring-2 focus:ring-indigo-100 focus:border-indigo-600 outline-none transition-all" 
                     placeholder="••••••••" 
                   />
+                  <button
+                    type="button"
+                    onClick={() => setShowPassword(!showPassword)}
+                    className="absolute right-4 top-1/2 -translate-y-1/2 text-slate-400 hover:text-indigo-600 transition-colors"
+                    aria-label={showPassword ? 'Hide password' : 'Show password'}
+                  >
+                    <i className={`fa-solid ${showPassword ? 'fa-eye-slash' : 'fa-eye'}`}></i>
+                  </button>
                 </div>
               </div>
 

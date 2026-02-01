@@ -79,6 +79,16 @@ service cloud.firestore {
     // Users can only read/write their own data
     match /users/{userId} {
       allow read, write: if request.auth != null && request.auth.uid == userId;
+      // Job analyses (matching scores) per user
+      match /jobAnalyses/{jobId} {
+        allow read, write: if request.auth != null && request.auth.uid == userId;
+      }
+    }
+    // Jobs collection: anyone can read, only authenticated can write (for seeding)
+    match /jobs/{jobId} {
+      allow read: if request.auth != null;
+      allow create: if request.auth != null;
+      allow update, delete: if false;
     }
   }
 }

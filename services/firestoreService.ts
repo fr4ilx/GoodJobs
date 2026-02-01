@@ -1,7 +1,7 @@
-import { doc, setDoc, getDoc, updateDoc, serverTimestamp, deleteField } from 'firebase/firestore';
+import { doc, setDoc, getDoc, updateDoc, serverTimestamp, deleteField, collection, getDocs, writeBatch } from 'firebase/firestore';
 import { ref, uploadBytes, getDownloadURL } from 'firebase/storage';
 import { db, storage } from '../config/firebase';
-import { UserPreferences, SkillsVisualization } from '../types';
+import { UserPreferences, SkillsVisualization, Job, JobAnalysis } from '../types';
 
 export interface FileMetadata {
   name: string;
@@ -258,5 +258,91 @@ export const saveSkillsVisualization = async (userId: string, visualization: Ski
   } catch (error) {
     console.error('❌ Error saving skills visualization:', error);
     throw error;
+  }
+};
+
+// ========== Jobs (global) ==========
+const JOBS_COLLECTION = 'jobs';
+
+/** Seed jobs to Firestore (idempotent - only adds if collection is empty). Returns [] on permission error. */
+export const seedJobsIfEmpty = async (jobs: Job[]): Promise<Job[]> => {
+  try {
+    const jobsRef = collection(db, JOBS_COLLECTION);
+    const snapshot = await getDocs(jobsRef);
+    if (snapshot.empty) {
+      const batch = writeBatch(db);
+      for (const job of jobs) {
+        const { analysis, ...baseJob } = job as Job & { analysis?: any };
+        const jobRef = doc(db, JOBS_COLLECTION, job.id);
+        batch.set(jobRef, { ...baseJob, createdAt: serverTimestamp() });
+      }
+      await batch.commit();
+      console.log('✅ Seeded', jobs.length, 'jobs to Firestore');
+      return jobs;
+    }
+    return snapshot.docs.map(d => ({ id: d.id, ...d.data() } as Job));
+  } catch (error) {
+    return [];
+  }
+};
+
+/** Get all jobs from Firestore. Returns [] on permission error. */
+export const getJobs = async (): Promise<Job[]> => {
+  try {
+    const jobsRef = collection(db, JOBS_COLLECTION);
+    const snapshot = await getDocs(jobsRef);
+    return snapshot.docs.map(d => ({ id: d.id, ...d.data() } as Job));
+  } catch {
+    return [];
+  }
+};
+
+// ========== Job analyses (per user) ==========
+
+const JOB_ANALYSES_STORAGE_KEY = (uid: string) => `goodjobs_job_analyses_${uid}`;
+
+/** Save job analysis for a user (Firestore with localStorage fallback) */
+export const saveJobAnalysis = async (userId: string, jobId: string, analysis: JobAnalysis) => {
+  try {
+    const ref = doc(db, 'users', userId, 'jobAnalyses', jobId);
+    await setDoc(ref, { ...analysis, updatedAt: serverTimestamp() });
+  } catch {
+    try {
+      const key = JOB_ANALYSES_STORAGE_KEY(userId);
+      const stored = localStorage.getItem(key);
+      const map: Record<string, JobAnalysis> = stored ? JSON.parse(stored) : {};
+      map[jobId] = analysis;
+      localStorage.setItem(key, JSON.stringify(map));
+    } catch (e) {
+      console.error('localStorage save failed:', e);
+      throw error;
+    }
+  }
+};
+
+/** Get all job analyses for a user (Firestore with localStorage fallback) */
+export const getJobAnalyses = async (userId: string): Promise<Record<string, JobAnalysis>> => {
+  try {
+    const ref = collection(db, 'users', userId, 'jobAnalyses');
+    const snapshot = await getDocs(ref);
+    const map: Record<string, JobAnalysis> = {};
+    snapshot.docs.forEach(d => {
+      const data = d.data();
+      map[d.id] = {
+        keywords: data.keywords || [],
+        keywordMatchScore: data.keywordMatchScore ?? 0,
+        whatLooksGood: data.whatLooksGood || '',
+        whatIsMissing: data.whatIsMissing || ''
+      };
+    });
+    return map;
+  } catch {
+    try {
+      const key = JOB_ANALYSES_STORAGE_KEY(userId);
+      const stored = localStorage.getItem(key);
+      return stored ? JSON.parse(stored) : {};
+    } catch {
+      return {};
+    }
   }
 };

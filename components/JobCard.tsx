@@ -33,13 +33,16 @@ const JobCard: React.FC<JobCardProps> = ({ job, onClick, onTrack, isTracked }) =
       </div>
 
       <div className="flex items-center gap-6">
-        {job.matchScore !== undefined ? (
+        {job.analysis?.keywordMatchScore !== undefined ? (
           <div className="bg-slate-50 border border-slate-100 rounded-2xl p-4 flex flex-col items-center justify-center min-w-[120px] transition-all group-hover:bg-indigo-50/50 group-hover:border-indigo-100">
             <span className="text-[10px] font-bold text-slate-400 uppercase tracking-tighter mb-1">Matching Score</span>
-            <span className="text-2xl font-black text-slate-900 group-hover:text-indigo-600">{job.matchScore.toFixed(0)}%</span>
+            <span className="text-2xl font-black text-slate-900 group-hover:text-indigo-600">{job.analysis.keywordMatchScore}%</span>
           </div>
         ) : (
-          <div className="text-xs font-bold text-slate-300 italic">Score Pending...</div>
+          <div className="bg-slate-50 border border-slate-100 rounded-2xl p-4 flex flex-col items-center justify-center min-w-[120px] transition-all group-hover:bg-indigo-50/50 group-hover:border-indigo-100">
+            <span className="text-[10px] font-bold text-slate-400 uppercase tracking-tighter mb-1">Matching Score</span>
+            <span className="text-2xl font-black text-slate-400">?</span>
+          </div>
         )}
         
         <div className="flex items-center gap-3">

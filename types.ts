@@ -13,18 +13,28 @@ export interface UserPreferences {
   securityClearance?: 'None' | 'Public Trust' | 'Secret' | 'Top Secret' | 'Top Secret/SCI';
 }
 
+/** Job analysis: ATS keywords + fit insights (persisted per user) */
+export interface JobAnalysis {
+  keywords: string[];           // ATS-normalized keywords from responsibilities, qualifications, preferred
+  keywordMatchScore: number;    // (my skills ∩ keywords) / keywords.length * 100
+  whatLooksGood: string;        // Skills I have, similar experiences, alignment
+  whatIsMissing: string;        // Missing keywords, maturity gaps, detailed notes
+}
+
 export interface Job {
   id: string;
   title: string;
   company: string;
   logo: string;
   description: string;
-  matchScore?: number;
+  matchScore?: number;          // Legacy: Gemini resume vs job match
   matchReason?: string;
   location: string;
   type: 'Full-time' | 'Contract' | 'Remote';
   category: string;
   jobUrl?: string;
+  /** Keyword-based analysis (from "Get matching score") */
+  analysis?: JobAnalysis;
 }
 
 export interface Recruiter {
@@ -53,6 +63,7 @@ export interface UserProfile {
 export enum NavItem {
   Jobs = 'Jobs',
   Track = 'Track',
+  Customize = 'Customize',
   Connect = 'Connect',
   Resume = 'Resume',
   Profile = 'Profile',

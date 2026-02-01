@@ -1,6 +1,6 @@
 
 import { GoogleGenAI, Type } from "@google/genai";
-import { SkillsVisualization, Recruiter } from "../types";
+import { SkillsVisualization, Recruiter, JobAnalysis } from "../types";
 import { fetchGitHubContent, parseGitHubUrl } from "./githubService";
 import { extractTextFromPDF } from "./pdfService";
 
@@ -1958,6 +1958,181 @@ Return a JSON array of objects with: name, role, email (simulated, e.g. firstnam
   } catch (error) {
     console.error('Discovery Error:', error);
     return [];
+  }
+}
+
+/** Input for batch job keyword extraction */
+export interface JobKeywordInput {
+  jobId: string;
+  title: string;
+  company: string;
+  description: string;
+}
+
+/**
+ * Extract ATS-normalized keywords from multiple job descriptions in one API call.
+ * Focuses on: responsibilities, qualifications, preferred qualifications.
+ * Keywords are normalized: lowercase, standard naming (e.g., "react" not "react.js").
+ */
+export async function extractJobKeywordsBatch(
+  jobs: JobKeywordInput[]
+): Promise<Record<string, string[]>> {
+  if (jobs.length === 0) return {};
+  const apiKey = getGeminiApiKey();
+  const ai = new GoogleGenAI({ apiKey });
+
+  const jobsBlock = jobs.map((j, i) => `
+=== JOB ${i + 1} [ID: ${j.jobId}] ===
+Title: ${j.title}
+Company: ${j.company}
+Description:
+${j.description}
+=== END JOB ${i + 1} ===`).join('\n\n');
+
+  const prompt = `You are an ATS (Applicant Tracking System) keyword extraction system. Extract skills and qualifications from job descriptions using ATS-style normalized keywords.
+
+RULES:
+1. Focus ONLY on: Responsibilities, Qualifications, and Preferred Qualifications sections.
+2. Normalize keywords: lowercase, standard naming (e.g., "react" not "react.js", "kubernetes" not "k8s", "python" not "Python").
+3. Extract: technologies, frameworks, languages, tools, concepts, methodologies.
+4. No duplicates. No generic filler words.
+5. Return one array of keywords per job, in the same order as input.
+
+Return valid JSON: { "results": [ ["keyword1","keyword2",...], ... ] }
+Each inner array corresponds to job 1, 2, 3... in order.`;
+
+  try {
+    const response = await ai.models.generateContent({
+      model: 'gemini-3-pro-preview',
+      contents: `${prompt}\n\n${jobsBlock}`,
+      config: {
+        responseMimeType: 'application/json',
+        responseSchema: {
+          type: Type.OBJECT,
+          properties: {
+            results: {
+              type: Type.ARRAY,
+              items: {
+                type: Type.ARRAY,
+                items: { type: Type.STRING }
+              }
+            }
+          },
+          required: ['results']
+        }
+      }
+    });
+    const rawText = response.text?.trim() || '';
+    let parsed: { results?: string[][] } = { results: [] };
+    try {
+      const jsonMatch = rawText.match(/\{[\s\S]*\}/);
+      const jsonStr = jsonMatch ? jsonMatch[0] : rawText;
+      parsed = JSON.parse(jsonStr);
+    } catch (parseErr) {
+      console.error('extractJobKeywordsBatch JSON parse error:', parseErr, 'Raw:', rawText?.slice(0, 500));
+    }
+    const results: Record<string, string[]> = {};
+    const resultsArr = parsed.results || [];
+    jobs.forEach((job, i) => {
+      const kw = resultsArr[i];
+      results[job.jobId] = Array.isArray(kw) ? kw : [];
+    });
+    console.log('extractJobKeywordsBatch:', { jobCount: jobs.length, keywordCounts: Object.fromEntries(Object.entries(results).map(([id, kws]) => [id, kws.length])) });
+    return results;
+  } catch (error) {
+    console.error('extractJobKeywordsBatch error:', error);
+    throw error;
+  }
+}
+
+/** Input for batch fit analysis */
+export interface JobFitInput {
+  jobId: string;
+  title: string;
+  company: string;
+  keywords: string[];
+  mySkills: string[];
+  matchedKeywords: string[];
+}
+
+/**
+ * Generate "What looks good" and "What is missing" for multiple jobs in one API call.
+ */
+export async function generateJobFitAnalysisBatch(
+  jobs: JobFitInput[],
+  skillsVisualization: SkillsVisualization
+): Promise<Record<string, { whatLooksGood: string; whatIsMissing: string }>> {
+  if (jobs.length === 0) return {};
+  const apiKey = getGeminiApiKey();
+  const ai = new GoogleGenAI({ apiKey });
+
+  const userSummary = `User's skills: ${skillsVisualization.all_skills.join(', ')}
+Professional experiences: ${skillsVisualization.professional_experiences.map(e => `${e.title} at ${e.company}`).join('; ')}
+Projects: ${skillsVisualization.projects.map(p => p.name).join('; ')}`;
+
+  const jobsBlock = jobs.map((j, i) => `
+=== JOB ${i + 1} [ID: ${j.jobId}] ===
+Title: ${j.title} at ${j.company}
+Job keywords: ${j.keywords.join(', ')}
+Matched (user has): ${j.matchedKeywords.join(', ')}
+Missing (user does not have): ${j.keywords.filter(k => !j.matchedKeywords.includes(k)).join(', ')}
+=== END JOB ${i + 1} ===`).join('\n\n');
+
+  const prompt = `Based on the user profile and each job's keywords (matched vs missing), produce structured analysis.
+
+For EACH job, provide:
+1. what_looks_good: Skills the user has, similar experiences, how their experience progression aligns with what the company wants. Be specific and encouraging.
+2. what_is_missing: Missing keywords, maturity/depth gaps in projects or skills, detailed notes on what experiences/projects/skills would increase their chances. Be constructive.
+
+Return valid JSON: { "results": [ { "what_looks_good": "...", "what_is_missing": "..." }, ... ] }
+Same order as input jobs.`;
+
+  try {
+    const response = await ai.models.generateContent({
+      model: 'gemini-3-pro-preview',
+      contents: `USER PROFILE:\n${userSummary}\n\nJOBS:\n${jobsBlock}\n\n${prompt}`,
+      config: {
+        responseMimeType: 'application/json',
+        responseSchema: {
+          type: Type.OBJECT,
+          properties: {
+            results: {
+              type: Type.ARRAY,
+              items: {
+                type: Type.OBJECT,
+                properties: {
+                  what_looks_good: { type: Type.STRING },
+                  what_is_missing: { type: Type.STRING }
+                },
+                required: ['what_looks_good', 'what_is_missing']
+              }
+            }
+          },
+          required: ['results']
+        }
+      }
+    });
+    const rawText = response.text?.trim() || '';
+    let parsed: { results?: any[] } = { results: [] };
+    try {
+      const jsonMatch = rawText.match(/\{[\s\S]*\}/);
+      parsed = JSON.parse(jsonMatch ? jsonMatch[0] : '{"results":[]}');
+    } catch (e) {
+      console.error('generateJobFitAnalysisBatch JSON parse error:', e);
+    }
+    const out: Record<string, { whatLooksGood: string; whatIsMissing: string }> = {};
+    (parsed.results || []).forEach((r: any, i: number) => {
+      if (jobs[i]) {
+        out[jobs[i].jobId] = {
+          whatLooksGood: r?.what_looks_good || '',
+          whatIsMissing: r?.what_is_missing || ''
+        };
+      }
+    });
+    return out;
+  } catch (error) {
+    console.error('generateJobFitAnalysisBatch error:', error);
+    return {};
   }
 }
 
