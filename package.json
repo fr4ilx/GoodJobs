@@ -12,6 +12,8 @@
     "@google/genai": "^1.35.0",
     "@types/papaparse": "^5.5.2",
     "firebase": "^12.8.0",
+    "html2canvas": "^1.4.1",
+    "jspdf": "^2.5.2",
     "papaparse": "^5.5.3",
     "pdfjs-dist": "^5.4.530",
     "react": "^19.0.0",

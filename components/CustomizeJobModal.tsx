@@ -3,6 +3,8 @@ import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { Job, SkillsVisualization, TailoredResumeContent } from '../types';
 import { generateTailoredResume } from '../services/geminiService';
 import { getTailoredResume, saveTailoredResume, SavedTailoredResume } from '../services/firestoreService';
+import html2canvas from 'html2canvas';
+import { jsPDF } from 'jspdf';
 
 interface CustomizeJobModalProps {
   job: Job;
@@ -25,33 +27,39 @@ function highlightUncertain(text: string): string {
 
 function tailoredContentToHtml(c: TailoredResumeContent, overrideGithub?: string): string {
   const gh = overrideGithub || c.contact.github || '';
+  const contactParts = [escapeHtml(stripMarkdown(c.contact.email))];
+  if (gh) contactParts.push(escapeHtml(stripMarkdown(gh)));
+  const contactLine = contactParts.join(' | ');
   const lines: string[] = [];
-  lines.push(`<div class="resume-contact"><strong>${escapeHtml(c.contact.name)}</strong><br/>${escapeHtml(c.contact.email)}${gh ? `<br/>${escapeHtml(gh)}` : ''}</div>`);
-  lines.push(`<div class="resume-summary">${highlightUncertain(c.summary)}</div>`);
+  lines.push(`<div class="resume-header"><div class="resume-name">${escapeHtml(stripMarkdown(c.contact.name))}</div><div class="resume-contact-line">${contactLine}</div></div>`);
+  lines.push(`<div class="resume-summary">${highlightUncertain(stripMarkdown(c.summary))}</div>`);
   if (c.experiences?.length) {
     lines.push('<div class="resume-section">Experience</div>');
     c.experiences.forEach(exp => {
-      lines.push(`<div class="resume-item"><strong>${escapeHtml(exp.title)}</strong>, ${escapeHtml(exp.company)}${exp.dates ? ` · ${highlightUncertain(exp.dates)}` : ''}</div>`);
-      exp.bullets?.forEach(b => lines.push(`<div class="resume-bullet">• ${escapeHtml(b)}</div>`));
+      lines.push(`<div class="resume-item"><strong>${escapeHtml(stripMarkdown(exp.title))}</strong>, ${escapeHtml(stripMarkdown(exp.company))}${exp.dates ? ` · ${highlightUncertain(stripMarkdown(exp.dates))}` : ''}</div>`);
+      exp.bullets?.forEach(b => lines.push(`<div class="resume-bullet">• ${escapeHtml(stripMarkdown(b))}</div>`));
     });
   }
   if (c.projects?.length) {
     lines.push('<div class="resume-section">Projects</div>');
     c.projects.forEach(p => {
-      lines.push(`<div class="resume-item"><strong>${escapeHtml(p.name)}</strong>${p.dates ? ` · ${highlightUncertain(p.dates)}` : ''}</div>`);
-      p.bullets?.forEach(b => lines.push(`<div class="resume-bullet">• ${escapeHtml(b)}</div>`));
+      lines.push(`<div class="resume-item"><strong>${escapeHtml(stripMarkdown(p.name))}</strong>${p.dates ? ` · ${highlightUncertain(stripMarkdown(p.dates))}` : ''}</div>`);
+      p.bullets?.forEach(b => lines.push(`<div class="resume-bullet">• ${escapeHtml(stripMarkdown(b))}</div>`));
     });
   }
   if (c.skills?.length) {
-    lines.push(`<div class="resume-section">Skills</div><div class="resume-skills">${c.skills.map(s => escapeHtml(s)).join(', ')}</div>`);
+    lines.push(`<div class="resume-section">Skills</div><div class="resume-skills">${c.skills.map(s => escapeHtml(stripMarkdown(s))).join(', ')}</div>`);
   }
-  if (c.education) {
-    const ed = c.education;
-    const degreePart = highlightUncertain(ed.degree || '');
-    const majorPart = ed.major ? ` in ${highlightUncertain(ed.major)}` : '';
-    const schoolPart = highlightUncertain(ed.school || '');
-    const yearPart = highlightUncertain(ed.year || '');
-    lines.push(`<div class="resume-section">Education</div><div class="resume-item">${degreePart}${majorPart}, ${schoolPart} · ${yearPart}</div>`);
+  const educationEntries = Array.isArray(c.education) ? c.education : c.education ? [c.education] : [];
+  if (educationEntries.length > 0) {
+    lines.push('<div class="resume-section">Education</div>');
+    educationEntries.forEach((ed) => {
+      const degreePart = highlightUncertain(stripMarkdown(ed.degree || ''));
+      const majorPart = ed.major ? ` in ${highlightUncertain(stripMarkdown(ed.major))}` : '';
+      const schoolPart = highlightUncertain(stripMarkdown(ed.school || ''));
+      const yearPart = highlightUncertain(stripMarkdown(ed.year || ''));
+      lines.push(`<div class="resume-education-item">${degreePart}${majorPart}, ${schoolPart} · ${yearPart}</div>`);
+    });
   }
   return lines.join('\n');
 }
@@ -62,19 +70,32 @@ function escapeHtml(s: string): string {
   return div.innerHTML;
 }
 
+/** Strip markdown formatting (bold, italic, etc.) from text */
+function stripMarkdown(text: string): string {
+  if (!text) return '';
+  return text
+    .replace(/\*\*([^*]+)\*\*/g, '$1')
+    .replace(/\*([^*]+)\*/g, '$1')
+    .replace(/__([^_]+)__/g, '$1')
+    .replace(/_([^_]+)_/g, '$1')
+    .replace(/`([^`]+)`/g, '$1');
+}
+
 /** Print/PDF styles for a professional resume layout */
 const RESUME_PRINT_CSS = `
-  @page { size: A4; margin: 18mm; }
+  @page { size: A4; margin: 5mm; }
   * { box-sizing: border-box; }
-  body { font-family: 'Georgia', 'Times New Roman', serif; font-size: 11pt; line-height: 1.35; color: #1a1a1a; max-width: 210mm; margin: 0 auto; padding: 0; }
-  .resume-contact { font-size: 13pt; font-weight: 700; margin-bottom: 4pt; letter-spacing: 0.02em; }
-  .resume-contact strong { font-size: 18pt; font-weight: 800; display: block; margin-bottom: 2pt; }
-  .resume-summary { margin-bottom: 10pt; text-align: justify; }
-  .resume-section { font-size: 10pt; font-weight: 800; text-transform: uppercase; letter-spacing: 0.12em; margin-top: 12pt; margin-bottom: 4pt; padding-bottom: 2pt; border-bottom: 1.5pt solid #1a1a1a; }
-  .resume-item { margin-bottom: 2pt; }
+  body { font-family: 'Georgia', 'Times New Roman', serif; font-size: 9pt; line-height: 1.4; color: #1a1a1a; max-width: 210mm; margin: 0 auto; padding: 5mm; }
+  .resume-header { text-align: center; margin-bottom: 6pt; }
+  .resume-name { font-size: 16pt; font-weight: 800; letter-spacing: 0.02em; margin-bottom: 3pt; }
+  .resume-contact-line { font-size: 8.5pt; color: #333; }
+  .resume-summary { margin-bottom: 8pt; text-align: justify; }
+  .resume-section { font-size: 9pt; font-weight: 800; text-transform: uppercase; letter-spacing: 0.12em; margin-top: 10pt; margin-bottom: 3pt; padding-bottom: 1.5pt; border-bottom: 1.5pt solid #1a1a1a; }
+  .resume-item { margin-bottom: 2pt; font-size: 9pt; }
+  .resume-education-item { margin-bottom: 6pt; font-size: 9pt; }
   .resume-item strong { font-weight: 700; }
-  .resume-bullet { margin-left: 12pt; margin-bottom: 3pt; text-indent: -12pt; padding-left: 12pt; }
-  .resume-skills { margin-top: 2pt; }
+  .resume-bullet { margin-left: 12pt; margin-bottom: 2pt; text-indent: -12pt; padding-left: 12pt; font-size: 9pt; }
+  .resume-skills { margin-top: 2pt; font-size: 9pt; }
   .resume-uncertain { background: #fef9c3; padding: 0 2pt; }
 `;
 
@@ -222,25 +243,57 @@ const CustomizeJobModal: React.FC<CustomizeJobModalProps> = ({
         htmlContent: currentHtml
       }, (saved?.version ?? 0) + 1);
 
-      // 2. Download PDF via print dialog (Save as PDF)
-      const printHtml = `<!DOCTYPE html><html><head><meta charset="utf-8"><title>Resume - ${escapeHtml(job.company)}</title><style>${RESUME_PRINT_CSS}</style></head><body>${currentHtml}</body></html>`;
-      const printWin = window.open('', '_blank');
-      if (printWin) {
-        printWin.document.write(printHtml);
-        printWin.document.close();
-        printWin.focus();
-        setTimeout(() => {
-          printWin.print();
-          printWin.onafterprint = () => printWin.close();
-        }, 300);
+      // 2. Convert to PDF and download directly (jspdf + html2canvas)
+      const pdfWrap = document.createElement('div');
+      pdfWrap.style.cssText = 'position:absolute;left:-9999px;top:0;width:210mm;padding:5mm;background:#fff;font-family:Georgia,Times New Roman,serif;font-size:9pt;line-height:1.4;color:#1a1a1a;';
+      pdfWrap.innerHTML = `<style>${RESUME_PRINT_CSS}</style>${currentHtml}`;
+      document.body.appendChild(pdfWrap);
+
+      const canvas = await html2canvas(pdfWrap, {
+        scale: 2,
+        useCORS: true,
+        logging: false,
+        backgroundColor: '#ffffff'
+      });
+      document.body.removeChild(pdfWrap);
+
+      const imgData = canvas.toDataURL('image/jpeg', 0.95);
+      const pdf = new jsPDF({ unit: 'mm', format: 'a4', orientation: 'portrait' });
+      const pageW = pdf.internal.pageSize.getWidth();
+      const pageH = pdf.internal.pageSize.getHeight();
+      
+      // Account for margins (5mm on all sides)
+      const margin = 5;
+      const contentW = pageW - (2 * margin);
+      const contentH = pageH - (2 * margin);
+      
+      // Calculate image dimensions when scaled to fit content area width
+      const imgW = contentW;
+      const imgH = (canvas.height * contentW) / canvas.width;
+
+      // Split across pages if needed
+      if (imgH <= contentH) {
+        // Fits on one page
+        pdf.addImage(imgData, 'JPEG', margin, margin, imgW, imgH);
       } else {
-        const wrap = document.createElement('div');
-        wrap.id = 'resume-print-fallback';
-        wrap.innerHTML = `<style>${RESUME_PRINT_CSS} #resume-print-fallback{position:fixed;inset:0;background:#fff;overflow:auto;z-index:9999;padding:18mm;}</style>${currentHtml}`;
-        document.body.appendChild(wrap);
-        window.print();
-        document.body.removeChild(wrap);
+        // Multiple pages needed
+        let currentY = 0;
+        let pageNum = 0;
+        
+        while (currentY < imgH) {
+          if (pageNum > 0) pdf.addPage();
+          
+          // For each page, show a vertical slice of the image
+          const yOffset = margin - currentY;
+          pdf.addImage(imgData, 'JPEG', margin, yOffset, imgW, imgH);
+          
+          currentY += contentH;
+          pageNum++;
+        }
       }
+
+      const fileName = `Resume_${job.company.replace(/[^a-zA-Z0-9]/g, '_')}_${new Date().toISOString().slice(0, 10)}.pdf`;
+      pdf.save(fileName);
 
       onSave(job.id);
       onClose();

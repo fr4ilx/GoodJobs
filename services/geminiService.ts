@@ -2020,13 +2020,16 @@ export async function generateTailoredResume(input: TailoredResumeInput): Promis
 
   const prompt = `You are an expert resume writer. Create a ONE-PAGE tailored resume for the candidate applying to this job.
 
+LAYOUT RULES (strict - must fit on ONE page):
+1. NAME: Centered at top. Large, bold. Nothing else on that line.
+2. CONTACT LINE: Centered, small font. Concatenate email and GitHub with pipe: "email@example.com | https://github.com/username". If no GitHub, just email. One line only.
+3. ONE-PAGE MAXIMUM: The entire resume MUST fit on a single page. If content overflows, cut bullets (keep strongest 2-3 per experience/project), shorten summary to 2 sentences max, reduce skills to most relevant 8-12. Be ruthless—one page only.
+
 FORMATTING RULES (Google recruiter guidelines):
 - PDF-ready, black text, clean consistent font
 - NO objective section (they know you want the job)
 - Use bullet points only - no long paragraphs
-- Keep resume to 1 page - be ruthless. If a bullet spills to a second line, shorten it.
 - Education before experience if recent grad (<3 years); otherwise experience first (reverse chronological)
-- Contact info (name, email) prominent at top. Include GitHub if technical role.
 - For technical roles: list programming languages prominently
 
 XYZ BULLET FORMAT (critical - use for every bullet):
@@ -2049,7 +2052,7 @@ KEYWORD TARGET (CRITICAL - YOU MUST REACH 85%+): Target 85%+ keyword match. Rule
 OUTPUT RULES - NO INTERNAL THINKING:
 - Output ONLY the final clean data. NEVER include reasoning, inference notes, or chain-of-thought in any JSON field.
 - For contact.github: Use the GitHub URL provided below EXACTLY. Do NOT infer or guess. If provided, copy it verbatim. If not provided, use empty string.
-- For education: Use the EDUCATION data from USER BACKGROUND exactly. If education was provided, output it. If "None provided", omit education or use empty strings. For any missing field use [Placeholder?]. NEVER output reasoning.
+- For education: Use the EDUCATION data from USER BACKGROUND exactly. Output each degree/school as a separate entry in the education array. Multiple entries = multiple items in the array, each on its own. If "None provided", omit education or use empty array. For any missing field use [Placeholder?]. NEVER output reasoning.
 
 === USER BACKGROUND ===
 Name: ${userName}
@@ -2088,9 +2091,12 @@ Return valid JSON. Use exact keys. NO reasoning in any field. For education: use
     { "name": "string", "type": "string", "dates": "string", "bullets": ["XYZ bullet", "..."] }
   ],
   "skills": ["skill1", "skill2"],
-  "education": { "school": "string", "degree": "string", "major": "string", "year": "string (use [Year?] if uncertain)" }
+  "education": [
+    { "school": "string", "degree": "string", "major": "string", "year": "string (use [Year?] if uncertain)" }
+  ]
 }
-You may add up to 5-6 bullets per experience/project to hit keyword target. Ensure 1-page fit.`;
+Each education entry on its own line in the output. Multiple entries separated by blank line.
+You may add up to 4 bullets per experience and 3 per project max. If you need to cut content to stay on one page, prioritize: 1) strongest XYZ bullets, 2) most relevant skills, 3) shortest summary. NEVER output a resume that would span 2 pages.`;
 
   try {
     const response = await ai.models.generateContent({
@@ -2140,12 +2146,16 @@ You may add up to 5-6 bullets per experience/project to hit keyword target. Ensu
             },
             skills: { type: Type.ARRAY, items: { type: Type.STRING } },
             education: {
-              type: Type.OBJECT,
-              properties: {
-                school: { type: Type.STRING },
-                degree: { type: Type.STRING },
-                major: { type: Type.STRING },
-                year: { type: Type.STRING }
+              type: Type.ARRAY,
+              items: {
+                type: Type.OBJECT,
+                properties: {
+                  school: { type: Type.STRING },
+                  degree: { type: Type.STRING },
+                  major: { type: Type.STRING },
+                  year: { type: Type.STRING }
+                },
+                required: ['school', 'degree', 'year']
               }
             }
           },
@@ -2162,6 +2172,11 @@ You may add up to 5-6 bullets per experience/project to hit keyword target. Ensu
       console.error('generateTailoredResume JSON parse error:', e);
       throw new Error('Failed to parse resume response');
     }
+    const educationArr = Array.isArray(parsed.education)
+      ? parsed.education
+      : parsed.education
+        ? [parsed.education]
+        : [];
     return {
       contact: {
         name: parsed.contact?.name || userName,
@@ -2172,7 +2187,7 @@ You may add up to 5-6 bullets per experience/project to hit keyword target. Ensu
       experiences: Array.isArray(parsed.experiences) ? parsed.experiences : [],
       projects: Array.isArray(parsed.projects) ? parsed.projects : [],
       skills: Array.isArray(parsed.skills) ? parsed.skills : [],
-      education: parsed.education
+      education: educationArr
     };
   } catch (error) {
     console.error('generateTailoredResume error:', error);
@@ -2400,29 +2415,64 @@ Same order as input jobs.`;
   }
 }
 
+const OUTREACH_TYPE_PROMPTS: Record<string, string> = {
+  'coffee-chat': 'The goal is to request a brief coffee chat (or virtual chat) to learn about their experience and the team. Be warm and concise; mention one specific fit from the resume.',
+  'referral': 'The goal is to politely ask if they would consider referring the candidate for the role. Be professional; highlight one concrete fit from the resume and keep the ask clear.',
+  'hiring-manager-intro': 'The goal is to introduce the candidate to the hiring manager for the role. Be professional and concise; state interest in the position and one strong fit from the resume.'
+};
+
 /**
- * Generates a personalized outreach email draft to a recruiter.
+ * Generates a short, professional outreach email (subject + body) for a contact.
+ * Returns structured { subject, body } for Gmail-style display.
+ * @param emailType - 'coffee-chat' | 'referral' | 'hiring-manager-intro'
  */
 export async function generateOutreachEmail(
   userName: string,
   resume: string,
   jobTitle: string,
   company: string,
-  recruiterName: string
-): Promise<string> {
+  recruiterName: string,
+  emailType: 'coffee-chat' | 'referral' | 'hiring-manager-intro' = 'coffee-chat'
+): Promise<{ subject: string; body: string }> {
   const apiKey = getGeminiApiKey();
   const ai = new GoogleGenAI({ apiKey });
+  const typePrompt = OUTREACH_TYPE_PROMPTS[emailType] || OUTREACH_TYPE_PROMPTS['coffee-chat'];
   try {
     const response = await ai.models.generateContent({
       model: 'gemini-3-pro-preview',
-      contents: `Write a high-converting, concise cold email from ${userName} to ${recruiterName} (at ${company}) regarding a ${jobTitle} position.
-Use the candidate's resume context to mention one specific value-add. Keep it under 150 words.
+      contents: `Write a short, professional cold email from ${userName} to ${recruiterName} at ${company} about the ${jobTitle} role.
 
-Candidate Resume: ${resume}`,
+Email type / goal: ${typePrompt}
+
+Rules:
+- Subject: one short, clear line. No quotes.
+- Body: 2–4 short paragraphs only. Professional tone. Plain text, no markdown.
+- Keep total body under 100 words.
+
+Candidate resume (brief): ${(resume || '').slice(0, 1500)}`,
+      config: {
+        responseMimeType: 'application/json',
+        responseSchema: {
+          type: Type.OBJECT,
+          properties: {
+            subject: { type: Type.STRING, description: 'Email subject line, plain text' },
+            body: { type: Type.STRING, description: 'Email body, plain text, short paragraphs' }
+          },
+          required: ['subject', 'body']
+        }
+      }
     });
-    return response.text?.trim() || 'Failed to generate draft.';
+    const raw = response.text?.trim() || '{}';
+    const parsed = JSON.parse(raw) as { subject?: string; body?: string };
+    return {
+      subject: (parsed.subject ?? '').trim() || `Re: ${jobTitle} at ${company}`,
+      body: (parsed.body ?? '').trim() || 'Failed to generate draft.'
+    };
   } catch (error) {
     console.error('Drafting Error:', error);
-    return 'Error generating draft.';
+    return {
+      subject: `Re: ${jobTitle} at ${company}`,
+      body: 'Error generating draft. Please try again.'
+    };
   }
 }

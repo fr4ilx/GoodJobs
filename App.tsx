@@ -1,6 +1,6 @@
 
 import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react';
-import { Job, NavItem, UserProfile, UserPreferences, SkillsVisualization, Recruiter } from './types';
+import { Job, NavItem, UserProfile, UserPreferences, SkillsVisualization, Contact, OutreachDraft, OutreachEmailType } from './types';
 import Sidebar from './components/Sidebar';
 import JobCard from './components/JobCard';
 import LandingPage from './components/LandingPage';
@@ -12,10 +12,12 @@ import JobDetailModal from './components/JobDetailModal';
 import CustomizeJobModal from './components/CustomizeJobModal';
 import PreferencesModal from './components/PreferencesModal';
 import VisualizeSkillsPage from './components/VisualizeSkillsPage';
-import { calculateMatchScore, analyzeSkills, validateGeminiApiKey, generateCustomizedResume, findRecruiters, generateOutreachEmail, extractJobKeywordsBatch, generateJobFitAnalysisBatch } from './services/geminiService';
+import { calculateMatchScore, analyzeSkills, validateGeminiApiKey, generateCustomizedResume, generateOutreachEmail, extractJobKeywordsBatch, generateJobFitAnalysisBatch } from './services/geminiService';
+import { findEmailViaApollo } from './services/apolloService';
+import { requestGmailAccess, createGmailDraft, isGmailConfigured } from './services/gmailService';
 import { useAuth } from './contexts/AuthContext';
 import { logOut } from './services/authService';
-import { saveUserPreferences, saveResumeData, saveUserProfile, getUserProfile, deleteResumeFile, deleteProjectFile, deleteProjectLink, FileMetadata, saveSkillsVisualization, seedJobsIfEmpty, getJobs, getJobAnalyses, saveJobAnalysis } from './services/firestoreService';
+import { saveUserPreferences, saveResumeData, saveUserProfile, getUserProfile, deleteResumeFile, deleteProjectFile, deleteProjectLink, FileMetadata, saveSkillsVisualization, seedJobsIfEmpty, getJobs, getJobAnalyses, saveJobAnalysis, saveTrackFlowState, getTrackFlowState, migrateJobRecruitersToContacts } from './services/firestoreService';
 import { fetchJobsWithFilters } from './services/apifyService';
 
 import { MOCK_JOBS } from './constants';
@@ -55,15 +57,22 @@ const App: React.FC = () => {
   const [sortBy, setSortBy] = useState<SortOption>('score-desc');
   const [trackedJobs, setTrackedJobs] = useState<Record<string, TrackStatus>>({});
   const [customizedResumes, setCustomizedResumes] = useState<Record<string, string>>({});
-  const [jobRecruiters, setJobRecruiters] = useState<Record<string, Recruiter[]>>({});
-  const [recruiterDrafts, setRecruiterDrafts] = useState<Record<string, string>>({});
+  const [jobContacts, setJobContacts] = useState<Record<string, Contact[]>>({});
+  const [contactDrafts, setContactDrafts] = useState<Record<string, OutreachDraft>>({});
+  const [findingEmailContactId, setFindingEmailContactId] = useState<string | null>(null);
+  const [addContactFirst, setAddContactFirst] = useState('');
+  const [addContactLast, setAddContactLast] = useState('');
+  const [addContactCompany, setAddContactCompany] = useState('');
+  const [contactDraftTypes, setContactDraftTypes] = useState<Record<string, OutreachEmailType>>({});
   const [activeTrackStage, setActiveTrackStage] = useState<TrackStatus | null>(null);
   const [customizingJob, setCustomizingJob] = useState<Job | null>(null);
   const [connectingJob, setConnectingJob] = useState<Job | null>(null);
-  const [viewingDraft, setViewingDraft] = useState<{ recruiter: Recruiter; draft: string } | null>(null);
+  const [viewingDraft, setViewingDraft] = useState<{ contact: Contact; draft: OutreachDraft } | null>(null);
   const [isTailoring, setIsTailoring] = useState(false);
-  const [isDiscovering, setIsDiscovering] = useState(false);
   const [isDrafting, setIsDrafting] = useState<string | null>(null);
+  const [gmailAccessToken, setGmailAccessToken] = useState<string | null>(null);
+  const [gmailConnecting, setGmailConnecting] = useState(false);
+  const [gmailSaving, setGmailSaving] = useState(false);
   const [isAnalyzingSkills, setIsAnalyzingSkills] = useState(false);
   const [isValidatingApiKey, setIsValidatingApiKey] = useState(false);
   const [apiKeyValidationResult, setApiKeyValidationResult] = useState<{ valid: boolean; error?: string } | null>(null); 
@@ -230,31 +239,74 @@ const App: React.FC = () => {
   }, [currentUser, isPreferencesComplete, isResumeComplete]);
 
   const trackStoragePrefix = () => `goodjobs_track_${currentUser?.uid || 'anon'}_`;
+  // Load track flow: prefer Firestore, fallback to localStorage
   useEffect(() => {
-    if (!currentUser) return;
-    const prefix = trackStoragePrefix();
-    try {
-      const t = localStorage.getItem(prefix + 'tracked');
-      const r = localStorage.getItem(prefix + 'resumes');
-      const rec = localStorage.getItem(prefix + 'recruiters');
-      const d = localStorage.getItem(prefix + 'drafts');
-      if (t) setTrackedJobs(JSON.parse(t));
-      if (r) setCustomizedResumes(JSON.parse(r));
-      if (rec) setJobRecruiters(JSON.parse(rec));
-      if (d) setRecruiterDrafts(JSON.parse(d));
-    } catch (_) {}
+    if (!currentUser?.uid) return;
+    let cancelled = false;
+    (async () => {
+      try {
+        const state = await getTrackFlowState(currentUser.uid);
+        if (cancelled) return;
+        if (state) {
+          setTrackedJobs((state.trackedJobs || {}) as Record<string, TrackStatus>);
+          setCustomizedResumes(state.customizedResumes || {});
+          setJobContacts(state.jobContacts || {});
+          setContactDrafts(state.contactDrafts || {});
+          return;
+        }
+      } catch (_) {}
+      if (cancelled) return;
+      const prefix = trackStoragePrefix();
+      try {
+        const t = localStorage.getItem(prefix + 'tracked');
+        const r = localStorage.getItem(prefix + 'resumes');
+        const rec = localStorage.getItem(prefix + 'contacts') || localStorage.getItem(prefix + 'recruiters');
+        const d = localStorage.getItem(prefix + 'contactDrafts') || localStorage.getItem(prefix + 'drafts');
+        if (t) setTrackedJobs(JSON.parse(t));
+        if (r) setCustomizedResumes(JSON.parse(r));
+        if (rec) {
+          const parsed = JSON.parse(rec);
+          if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+            const firstArr = Object.values(parsed)[0] as unknown[];
+            const isLegacy = Array.isArray(firstArr) && firstArr[0] != null && typeof (firstArr[0] as { firstName?: string }).firstName !== 'string';
+            type LegacyRecruiters = Record<string, { id: string; name: string; email?: string; role?: string; avatar?: string; relevance?: string }[]>;
+            setJobContacts(isLegacy ? migrateJobRecruitersToContacts(parsed as LegacyRecruiters) : (parsed as Record<string, Contact[]>));
+          }
+        }
+        if (d) {
+          const parsed = JSON.parse(d) as Record<string, unknown>;
+          const normalized: Record<string, OutreachDraft> = {};
+          for (const [k, v] of Object.entries(parsed || {})) {
+            if (typeof v === 'string') normalized[k] = { subject: '', body: v };
+            else if (v && typeof v === 'object' && 'body' in v) normalized[k] = { subject: String((v as OutreachDraft).subject ?? ''), body: String((v as OutreachDraft).body ?? '') };
+          }
+          setContactDrafts(normalized);
+        }
+      } catch (_) {}
+    })();
+    return () => { cancelled = true; };
   }, [currentUser?.uid]);
 
+  // Save track flow: localStorage immediately, Firestore debounced
   useEffect(() => {
-    if (!currentUser) return;
+    if (!currentUser?.uid) return;
     const prefix = trackStoragePrefix();
     try {
       localStorage.setItem(prefix + 'tracked', JSON.stringify(trackedJobs));
       localStorage.setItem(prefix + 'resumes', JSON.stringify(customizedResumes));
-      localStorage.setItem(prefix + 'recruiters', JSON.stringify(jobRecruiters));
-      localStorage.setItem(prefix + 'drafts', JSON.stringify(recruiterDrafts));
+      localStorage.setItem(prefix + 'contacts', JSON.stringify(jobContacts));
+      localStorage.setItem(prefix + 'contactDrafts', JSON.stringify(contactDrafts));
     } catch (_) {}
-  }, [trackedJobs, customizedResumes, jobRecruiters, recruiterDrafts, currentUser?.uid]);
+    const t = setTimeout(() => {
+      saveTrackFlowState(currentUser.uid, {
+        trackedJobs,
+        customizedResumes,
+        jobContacts,
+        contactDrafts
+      }).catch(() => {});
+    }, 600);
+    return () => clearTimeout(t);
+  }, [trackedJobs, customizedResumes, jobContacts, contactDrafts, currentUser?.uid]);
 
   const handleStart = (mode: 'login' | 'signup') => {
     setAuthMode(mode);
@@ -670,37 +722,123 @@ const App: React.FC = () => {
       setIsTailoring(false);
     }
   };
-  const handleDiscoverRecruiters = async (job: Job) => {
-    setIsDiscovering(true);
+  const handleAddContact = (jobId: string, firstName: string, lastName: string, companyNameOrUrl: string) => {
+    const trimmedFirst = firstName.trim();
+    const trimmedLast = lastName.trim();
+    const trimmedCompany = companyNameOrUrl.trim();
+    if (!trimmedFirst || !trimmedLast || !trimmedCompany) return;
+    const newContact: Contact = {
+      id: `contact-${Date.now()}-${Math.random().toString(36).slice(2, 9)}`,
+      firstName: trimmedFirst,
+      lastName: trimmedLast,
+      companyNameOrUrl: trimmedCompany
+    };
+    setJobContacts((prev) => ({
+      ...prev,
+      [jobId]: [...(prev[jobId] || []), newContact]
+    }));
+  };
+
+  const handleFindEmail = async (contact: Contact) => {
+    setFindingEmailContactId(contact.id);
     try {
-      const found = await findRecruiters(job.company, job.title);
-      setJobRecruiters((prev) => ({ ...prev, [job.id]: found }));
+      const result = await findEmailViaApollo(contact.firstName, contact.lastName, contact.companyNameOrUrl);
+      if (result) {
+        setJobContacts((prev) => {
+          const next = { ...prev };
+          for (const [jobId, list] of Object.entries(next)) {
+            const idx = list.findIndex((c) => c.id === contact.id);
+            if (idx >= 0) {
+              const updated = [...list];
+              updated[idx] = {
+                ...updated[idx],
+                email: result.email ?? updated[idx].email,
+                role: result.title ?? updated[idx].role,
+                avatar: result.photo_url ?? updated[idx].avatar
+              };
+              next[jobId] = updated;
+              break;
+            }
+          }
+          return next;
+        });
+      }
     } finally {
-      setIsDiscovering(false);
+      setFindingEmailContactId(null);
     }
   };
-  const handleDraftEmail = async (job: Job, recruiter: Recruiter) => {
-    setIsDrafting(recruiter.id);
+
+  const handleDraftEmail = async (job: Job, contact: Contact) => {
+    setIsDrafting(contact.id);
     try {
-      const draft = await generateOutreachEmail(
+      const contactName = `${contact.firstName} ${contact.lastName}`.trim();
+      const draft: OutreachDraft = await generateOutreachEmail(
         userProfile.name,
         userProfile.resumeContent || '',
         job.title,
         job.company,
-        recruiter.name
+        contactName,
+        contactDraftTypes[contact.id] ?? 'coffee-chat'
       );
-      setRecruiterDrafts((prev) => ({ ...prev, [recruiter.id]: draft }));
-      setViewingDraft({ recruiter, draft });
+      setContactDrafts((prev) => ({ ...prev, [contact.id]: draft }));
+      setViewingDraft({ contact, draft });
     } finally {
       setIsDrafting(null);
     }
   };
-  const allRecruiters = useMemo(() => {
-    return Object.entries(jobRecruiters).flatMap(([jobId, recs]) => {
+
+  const updateViewingDraft = (updates: Partial<OutreachDraft>) => {
+    if (!viewingDraft) return;
+    const draft: OutreachDraft = { ...viewingDraft.draft, ...updates };
+    setViewingDraft({ ...viewingDraft, draft });
+    setContactDrafts((prev) => ({ ...prev, [viewingDraft.contact.id]: draft }));
+  };
+
+  const handleConnectGmail = async () => {
+    if (!isGmailConfigured()) {
+      alert('Gmail integration not configured. Add VITE_GOOGLE_CLIENT_ID to .env.local. See GMAIL_SETUP.md.');
+      return;
+    }
+    setGmailConnecting(true);
+    try {
+      const token = await requestGmailAccess();
+      if (token) setGmailAccessToken(token);
+    } finally {
+      setGmailConnecting(false);
+    }
+  };
+
+  const handleSaveToGmail = async () => {
+    if (!viewingDraft) return;
+    const to = viewingDraft.contact.email;
+    if (!to) {
+      alert('No email for this contact. Use "Find email" first or add it manually.');
+      return;
+    }
+    let token = gmailAccessToken;
+    if (!token && isGmailConfigured()) {
+      setGmailConnecting(true);
+      token = await requestGmailAccess();
+      setGmailConnecting(false);
+      if (token) setGmailAccessToken(token);
+    }
+    if (!token) return;
+    setGmailSaving(true);
+    try {
+      const result = await createGmailDraft(token, to, viewingDraft.draft.subject, viewingDraft.draft.body);
+      if (result.error) alert(`Could not save to Gmail: ${result.error}`);
+      else alert('Draft saved to Gmail. Open Gmail to view and send.');
+    } finally {
+      setGmailSaving(false);
+    }
+  };
+
+  const allContacts = useMemo(() => {
+    return Object.entries(jobContacts).flatMap(([jobId, list]) => {
       const job = jobs.find((j) => j.id === jobId);
-      return recs.map((r) => ({ ...r, jobCompany: job?.company, jobTitle: job?.title }));
+      return list.map((c) => ({ ...c, jobCompany: job?.company, jobTitle: job?.title }));
     });
-  }, [jobRecruiters, jobs]);
+  }, [jobContacts, jobs]);
 
   // Resume section handlers
   const handleResumeDrop = (e: React.DragEvent) => {
@@ -1100,15 +1238,11 @@ const App: React.FC = () => {
                       <i className="fa-solid fa-arrow-left"></i>
                     </button>
                     <div>
-                      <h2 className="text-2xl font-black text-slate-900 leading-tight">Stakeholder Radar: {connectingJob.company}</h2>
+                      <h2 className="text-2xl font-black text-slate-900 leading-tight">Networking: {connectingJob.company}</h2>
                       <p className="text-emerald-600 font-bold text-xs uppercase tracking-widest">{connectingJob.title}</p>
                     </div>
                   </div>
                   <div className="flex gap-3">
-                    <button onClick={() => handleDiscoverRecruiters(connectingJob)} disabled={isDiscovering} className="bg-emerald-600 text-white px-6 py-3 rounded-xl font-black text-xs uppercase tracking-widest flex items-center gap-3 hover:bg-emerald-700 transition-all disabled:opacity-50 shadow-lg shadow-emerald-100">
-                      {isDiscovering ? <i className="fa-solid fa-spinner animate-spin"></i> : <i className="fa-solid fa-users-viewfinder"></i>}
-                      Scan Stakeholders
-                    </button>
                     <button onClick={() => { moveJob(connectingJob.id, 'Apply'); setConnectingJob(null); }} className="bg-slate-900 text-white px-6 py-3 rounded-xl font-black text-xs uppercase tracking-widest flex items-center gap-3 hover:bg-slate-800 transition-all shadow-xl">
                       Move to Apply
                       <i className="fa-solid fa-arrow-right"></i>
@@ -1117,64 +1251,94 @@ const App: React.FC = () => {
                 </header>
                 <div className="flex-1 grid grid-cols-1 lg:grid-cols-2 gap-8 overflow-hidden pb-8">
                   <div className="space-y-4 overflow-y-auto pr-4 custom-scrollbar">
-                    {(jobRecruiters[connectingJob.id] || []).map((rec) => (
-                      <div key={rec.id} className="bg-white p-6 rounded-[2rem] border border-slate-100 shadow-sm flex items-center justify-between group hover:border-emerald-100 transition-all">
-                        <div className="flex items-center gap-5">
-                          <img src={rec.avatar} alt="" className="w-14 h-14 rounded-2xl object-cover shadow-sm border border-slate-100" />
-                          <div>
-                            <h4 className="font-black text-slate-900 leading-tight">{rec.name}</h4>
-                            <p className="text-xs font-bold text-emerald-600 mb-1">{rec.role}</p>
-                            <p className="text-[10px] text-slate-400 font-medium leading-tight max-w-[200px]">{rec.relevance}</p>
+                    <div className="bg-white p-6 rounded-[2rem] border border-slate-100 shadow-sm">
+                      <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest mb-4">Add contact</p>
+                      <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 mb-3">
+                        <input type="text" placeholder="First name" value={addContactFirst} onChange={(e) => setAddContactFirst(e.target.value)} className="px-4 py-3 rounded-xl border border-slate-200 text-sm font-medium text-slate-800 placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:ring-emerald-500/30 focus:border-emerald-500" />
+                        <input type="text" placeholder="Last name" value={addContactLast} onChange={(e) => setAddContactLast(e.target.value)} className="px-4 py-3 rounded-xl border border-slate-200 text-sm font-medium text-slate-800 placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:ring-emerald-500/30 focus:border-emerald-500" />
+                        <input type="text" placeholder="Company name or URL" value={addContactCompany} onChange={(e) => setAddContactCompany(e.target.value)} className="px-4 py-3 rounded-xl border border-slate-200 text-sm font-medium text-slate-800 placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:ring-emerald-500/30 focus:border-emerald-500 sm:col-span-1" />
+                      </div>
+                      <button onClick={() => { handleAddContact(connectingJob.id, addContactFirst, addContactLast, addContactCompany); setAddContactFirst(''); setAddContactLast(''); setAddContactCompany(''); }} className="bg-emerald-600 text-white px-5 py-2.5 rounded-xl text-xs font-black uppercase tracking-widest hover:bg-emerald-700 transition-all">
+                        Add contact
+                      </button>
+                    </div>
+                    {(jobContacts[connectingJob.id] || []).map((contact) => (
+                      <div key={contact.id} className="bg-white p-6 rounded-[2rem] border border-slate-100 shadow-sm flex flex-wrap items-center justify-between gap-4 group hover:border-emerald-100 transition-all">
+                        <div className="flex items-center gap-5 flex-wrap">
+                          <img src={contact.avatar || `https://ui-avatars.com/api/?name=${encodeURIComponent(contact.firstName + ' ' + contact.lastName)}&background=random&size=200`} alt="" className="w-14 h-14 rounded-2xl object-cover shadow-sm border border-slate-100" />
+                          <div className="flex flex-wrap items-center gap-2 sm:gap-3">
+                            <h4 className="font-black text-slate-900 leading-tight">{contact.firstName} {contact.lastName}</h4>
+                            <div className="flex gap-1.5 flex-shrink-0">
+                              {(['coffee-chat', 'referral', 'hiring-manager-intro'] as const).map((type) => (
+                                <button key={type} onClick={(e) => { e.stopPropagation(); setContactDraftTypes((prev) => ({ ...prev, [contact.id]: type })); }} className={`px-2.5 py-1 rounded-lg text-[10px] font-bold uppercase tracking-wide transition-all ${(contactDraftTypes[contact.id] ?? 'coffee-chat') === type ? 'bg-emerald-600 text-white shadow-sm' : 'bg-slate-100 text-slate-500 hover:bg-slate-200'}`} title={type === 'coffee-chat' ? 'Coffee chat' : type === 'referral' ? 'Referral' : 'Hiring manager intro'}>
+                                  {type === 'coffee-chat' ? 'Chat' : type === 'referral' ? 'Referral' : 'Intro'}
+                                </button>
+                              ))}
+                            </div>
+                            <p className="text-xs font-bold text-emerald-600 mb-0 w-full sm:w-auto">{contact.companyNameOrUrl}</p>
+                            {contact.role && <p className="text-[10px] text-slate-400 font-medium">{contact.role}</p>}
+                            {contact.email ? <p className="text-[10px] text-slate-500 font-medium">{contact.email}</p> : null}
                           </div>
                         </div>
-                        <button onClick={() => handleDraftEmail(connectingJob, rec)} disabled={isDrafting === rec.id} className="flex-none bg-emerald-50 text-emerald-600 px-5 py-3 rounded-xl text-[10px] font-black uppercase tracking-widest hover:bg-emerald-600 hover:text-white transition-all disabled:opacity-50">
-                          {isDrafting === rec.id ? 'Thinking...' : (recruiterDrafts[rec.id] ? 'Review Draft' : 'Draft Email')}
-                        </button>
+                        <div className="flex items-center gap-2">
+                          {!contact.email ? (
+                            <button onClick={() => handleFindEmail(contact)} disabled={findingEmailContactId === contact.id} className="bg-slate-100 text-slate-600 px-4 py-2.5 rounded-xl text-[10px] font-black uppercase tracking-widest hover:bg-slate-200 transition-all disabled:opacity-50">
+                              {findingEmailContactId === contact.id ? <i className="fa-solid fa-spinner animate-spin"></i> : null} Find email
+                            </button>
+                          ) : null}
+                          <button onClick={() => handleDraftEmail(connectingJob, contact)} disabled={isDrafting === contact.id} className="flex-none bg-emerald-50 text-emerald-600 px-5 py-3 rounded-xl text-[10px] font-black uppercase tracking-widest hover:bg-emerald-600 hover:text-white transition-all disabled:opacity-50">
+                            {isDrafting === contact.id ? 'Thinking...' : (contactDrafts[contact.id] ? 'Review Draft' : 'Draft Email')}
+                          </button>
+                        </div>
                       </div>
                     ))}
-                    {!(jobRecruiters[connectingJob.id] || []).length && !isDiscovering && (
+                    {!(jobContacts[connectingJob.id] || []).length && (
                       <div className="h-full flex flex-col items-center justify-center p-12 text-center border-4 border-dashed border-slate-100 rounded-[3rem] bg-white/50">
-                        <i className="fa-solid fa-satellite-dish text-4xl text-slate-200 mb-6"></i>
-                        <h4 className="text-xl font-black text-slate-300 tracking-tight">Radar Silent</h4>
-                        <p className="text-slate-400 font-bold mt-2">Run stakeholder discovery to find decision makers at this company.</p>
-                      </div>
-                    )}
-                    {isDiscovering && (
-                      <div className="space-y-4">
-                        {[1, 2, 3].map((i) => (
-                          <div key={i} className="bg-white p-6 rounded-[2rem] animate-pulse border border-slate-100 flex items-center gap-5">
-                            <div className="w-14 h-14 bg-slate-50 rounded-2xl"></div>
-                            <div className="flex-1 space-y-2">
-                              <div className="h-4 bg-slate-50 w-1/4 rounded"></div>
-                              <div className="h-3 bg-slate-50 w-1/3 rounded"></div>
-                              <div className="h-2 bg-slate-50 w-1/2 rounded"></div>
-                            </div>
-                          </div>
-                        ))}
+                        <i className="fa-solid fa-address-book text-4xl text-slate-200 mb-6"></i>
+                        <h4 className="text-xl font-black text-slate-300 tracking-tight">No contacts yet</h4>
+                        <p className="text-slate-400 font-bold mt-2">Add a contact above (first name, last name, company or URL). Then use Find email and Draft email.</p>
                       </div>
                     )}
                   </div>
                   <div className="bg-white rounded-[3rem] border border-slate-100 shadow-2xl flex flex-col overflow-hidden">
                     <div className="p-6 border-b border-slate-50 flex items-center justify-between bg-slate-50/30">
                       <span className="text-[10px] font-black text-slate-400 uppercase tracking-widest">Outreach Workbench</span>
-                      <i className="fa-solid fa-pen-nib text-emerald-400"></i>
+                      <div className="flex items-center gap-2">
+                        {!gmailAccessToken ? (
+                          <button onClick={handleConnectGmail} disabled={gmailConnecting} className="px-3 py-1.5 rounded-lg bg-red-50 text-red-600 text-[10px] font-bold uppercase tracking-wider hover:bg-red-100 transition-all disabled:opacity-50 flex items-center gap-1.5 border border-red-200">
+                            {gmailConnecting ? <i className="fa-solid fa-spinner animate-spin"></i> : <i className="fa-brands fa-google"></i>}
+                            Connect Gmail
+                          </button>
+                        ) : (
+                          <span className="text-[10px] font-bold text-emerald-600 uppercase flex items-center gap-1.5"><i className="fa-brands fa-google"></i> Gmail connected</span>
+                        )}
+                        <i className="fa-solid fa-pen-nib text-emerald-400"></i>
+                      </div>
                     </div>
                     {viewingDraft ? (
-                      <div className="flex-1 flex flex-col overflow-hidden p-8 animate-in fade-in zoom-in-95 duration-300">
-                        <div className="flex items-center gap-4 mb-6 pb-6 border-b border-slate-50">
-                          <img src={viewingDraft.recruiter.avatar} alt="" className="w-12 h-12 rounded-xl" />
-                          <div>
-                            <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest">Direct Contact</p>
-                            <p className="text-xs font-bold text-slate-900">{viewingDraft.recruiter.name} &lt;{viewingDraft.recruiter.email}&gt;</p>
+                      <div className="flex-1 flex flex-col overflow-hidden p-6 animate-in fade-in zoom-in-95 duration-300">
+                        <div className="border border-slate-200 rounded-2xl bg-white shadow-sm overflow-hidden flex flex-col flex-1 min-h-0">
+                          <div className="flex items-center gap-3 px-4 py-3 border-b border-slate-100 bg-slate-50/50">
+                            <span className="text-[10px] font-black text-slate-400 uppercase tracking-widest w-14 shrink-0">To</span>
+                            <span className="text-sm text-slate-700 truncate">{viewingDraft.contact.firstName} {viewingDraft.contact.lastName}{viewingDraft.contact.email ? ` <${viewingDraft.contact.email}>` : ' (no email)'}</span>
+                          </div>
+                          <div className="flex items-center gap-3 px-4 py-3 border-b border-slate-100">
+                            <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest w-14 shrink-0">Subject</label>
+                            <input type="text" value={viewingDraft.draft.subject} onChange={(e) => updateViewingDraft({ subject: e.target.value })} className="flex-1 min-w-0 text-sm font-medium text-slate-800 bg-transparent border-none outline-none placeholder:text-slate-400" placeholder="Email subject" />
+                          </div>
+                          <div className="flex-1 flex flex-col min-h-0 p-4">
+                            <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest mb-2 block">Body</label>
+                            <textarea value={viewingDraft.draft.body} onChange={(e) => updateViewingDraft({ body: e.target.value })} className="flex-1 min-h-[120px] w-full text-sm font-normal leading-relaxed text-slate-700 border border-slate-200 rounded-xl p-4 resize-none outline-none focus:ring-2 focus:ring-emerald-500/20 focus:border-emerald-500 placeholder:text-slate-400" placeholder="Write your message..." />
                           </div>
                         </div>
-                        <div className="flex-1 bg-slate-50 p-8 rounded-3xl border border-slate-100 overflow-y-auto">
-                          <textarea value={viewingDraft.draft} onChange={(e) => setViewingDraft({ ...viewingDraft, draft: e.target.value })} className="w-full h-full bg-transparent text-sm font-medium leading-relaxed text-slate-600 border-none outline-none resize-none" />
-                        </div>
-                        <div className="mt-6 flex gap-3">
-                          <button className="flex-1 bg-emerald-600 text-white py-4 rounded-xl font-black text-xs uppercase tracking-widest shadow-lg shadow-emerald-100 hover:bg-emerald-700 transition-all flex items-center justify-center gap-2">
+                        <div className="mt-4 flex flex-wrap gap-3">
+                          <button className="flex-1 min-w-[140px] bg-emerald-600 text-white py-3 rounded-xl font-black text-xs uppercase tracking-widest shadow-lg shadow-emerald-100 hover:bg-emerald-700 transition-all flex items-center justify-center gap-2">
                             <i className="fa-solid fa-paper-plane"></i>
-                            Send to Recruiter
+                            Send to contact
+                          </button>
+                          <button onClick={handleSaveToGmail} disabled={gmailSaving || !viewingDraft.contact.email} className="px-5 py-3 rounded-xl border border-red-200 bg-red-50 text-red-600 font-black text-xs uppercase tracking-widest hover:bg-red-100 transition-all disabled:opacity-50 flex items-center gap-2" title={!viewingDraft.contact.email ? 'Add contact email first' : 'Save draft to your Gmail'}>
+                            {gmailSaving ? <i className="fa-solid fa-spinner animate-spin"></i> : <i className="fa-brands fa-google"></i>}
+                            Save to Gmail
                           </button>
                           <button onClick={() => setViewingDraft(null)} className="px-6 border border-slate-200 text-slate-400 rounded-xl font-black text-xs uppercase tracking-widest hover:bg-slate-50 transition-all">Dismiss</button>
                         </div>
@@ -1265,6 +1429,11 @@ const App: React.FC = () => {
                                   {job.analysis?.keywordMatchScore !== undefined && (
                                     <span className="inline-block mt-2 px-2 py-0.5 bg-indigo-50 text-indigo-600 rounded text-[10px] font-black">{job.analysis.keywordMatchScore}% match</span>
                                   )}
+                                  {s.key === 'Apply' && (
+                                    <button onClick={(e) => { e.stopPropagation(); moveJob(job.id, 'Done'); }} className="mt-3 w-full py-2 rounded-lg bg-blue-600 text-white text-xs font-black uppercase tracking-widest hover:bg-blue-700 transition-all">
+                                      Apply
+                                    </button>
+                                  )}
                                 </div>
                               </div>
                             </div>
@@ -1295,15 +1464,11 @@ const App: React.FC = () => {
                       <i className="fa-solid fa-arrow-left"></i>
                     </button>
                     <div>
-                      <h2 className="text-2xl font-black text-slate-900 leading-tight">Stakeholder Radar: {connectingJob.company}</h2>
+                      <h2 className="text-2xl font-black text-slate-900 leading-tight">Networking: {connectingJob.company}</h2>
                       <p className="text-emerald-600 font-bold text-xs uppercase tracking-widest">{connectingJob.title}</p>
                     </div>
                   </div>
                   <div className="flex gap-3">
-                    <button onClick={() => handleDiscoverRecruiters(connectingJob)} disabled={isDiscovering} className="bg-emerald-600 text-white px-6 py-3 rounded-xl font-black text-xs uppercase tracking-widest flex items-center gap-3 hover:bg-emerald-700 transition-all disabled:opacity-50 shadow-lg shadow-emerald-100">
-                      {isDiscovering ? <i className="fa-solid fa-spinner animate-spin"></i> : <i className="fa-solid fa-users-viewfinder"></i>}
-                      Scan Stakeholders
-                    </button>
                     <button onClick={() => { moveJob(connectingJob.id, 'Apply'); setConnectingJob(null); }} className="bg-slate-900 text-white px-6 py-3 rounded-xl font-black text-xs uppercase tracking-widest flex items-center gap-3 hover:bg-slate-800 transition-all shadow-xl">
                       Move to Apply
                       <i className="fa-solid fa-arrow-right"></i>
@@ -1312,64 +1477,94 @@ const App: React.FC = () => {
                 </header>
                 <div className="flex-1 grid grid-cols-1 lg:grid-cols-2 gap-8 overflow-hidden pb-8">
                   <div className="space-y-4 overflow-y-auto pr-4 custom-scrollbar">
-                    {(jobRecruiters[connectingJob.id] || []).map((rec) => (
-                      <div key={rec.id} className="bg-white p-6 rounded-[2rem] border border-slate-100 shadow-sm flex items-center justify-between group hover:border-emerald-100 transition-all">
-                        <div className="flex items-center gap-5">
-                          <img src={rec.avatar} alt="" className="w-14 h-14 rounded-2xl object-cover shadow-sm border border-slate-100" />
-                          <div>
-                            <h4 className="font-black text-slate-900 leading-tight">{rec.name}</h4>
-                            <p className="text-xs font-bold text-emerald-600 mb-1">{rec.role}</p>
-                            <p className="text-[10px] text-slate-400 font-medium leading-tight max-w-[200px]">{rec.relevance}</p>
+                    <div className="bg-white p-6 rounded-[2rem] border border-slate-100 shadow-sm">
+                      <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest mb-4">Add contact</p>
+                      <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 mb-3">
+                        <input type="text" placeholder="First name" value={addContactFirst} onChange={(e) => setAddContactFirst(e.target.value)} className="px-4 py-3 rounded-xl border border-slate-200 text-sm font-medium text-slate-800 placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:ring-emerald-500/30 focus:border-emerald-500" />
+                        <input type="text" placeholder="Last name" value={addContactLast} onChange={(e) => setAddContactLast(e.target.value)} className="px-4 py-3 rounded-xl border border-slate-200 text-sm font-medium text-slate-800 placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:ring-emerald-500/30 focus:border-emerald-500" />
+                        <input type="text" placeholder="Company name or URL" value={addContactCompany} onChange={(e) => setAddContactCompany(e.target.value)} className="px-4 py-3 rounded-xl border border-slate-200 text-sm font-medium text-slate-800 placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:ring-emerald-500/30 focus:border-emerald-500 sm:col-span-1" />
+                      </div>
+                      <button onClick={() => { handleAddContact(connectingJob.id, addContactFirst, addContactLast, addContactCompany); setAddContactFirst(''); setAddContactLast(''); setAddContactCompany(''); }} className="bg-emerald-600 text-white px-5 py-2.5 rounded-xl text-xs font-black uppercase tracking-widest hover:bg-emerald-700 transition-all">
+                        Add contact
+                      </button>
+                    </div>
+                    {(jobContacts[connectingJob.id] || []).map((contact) => (
+                      <div key={contact.id} className="bg-white p-6 rounded-[2rem] border border-slate-100 shadow-sm flex flex-wrap items-center justify-between gap-4 group hover:border-emerald-100 transition-all">
+                        <div className="flex items-center gap-5 flex-wrap">
+                          <img src={contact.avatar || `https://ui-avatars.com/api/?name=${encodeURIComponent(contact.firstName + ' ' + contact.lastName)}&background=random&size=200`} alt="" className="w-14 h-14 rounded-2xl object-cover shadow-sm border border-slate-100" />
+                          <div className="flex flex-wrap items-center gap-2 sm:gap-3">
+                            <h4 className="font-black text-slate-900 leading-tight">{contact.firstName} {contact.lastName}</h4>
+                            <div className="flex gap-1.5 flex-shrink-0">
+                              {(['coffee-chat', 'referral', 'hiring-manager-intro'] as const).map((type) => (
+                                <button key={type} onClick={(e) => { e.stopPropagation(); setContactDraftTypes((prev) => ({ ...prev, [contact.id]: type })); }} className={`px-2.5 py-1 rounded-lg text-[10px] font-bold uppercase tracking-wide transition-all ${(contactDraftTypes[contact.id] ?? 'coffee-chat') === type ? 'bg-emerald-600 text-white shadow-sm' : 'bg-slate-100 text-slate-500 hover:bg-slate-200'}`} title={type === 'coffee-chat' ? 'Coffee chat' : type === 'referral' ? 'Referral' : 'Hiring manager intro'}>
+                                  {type === 'coffee-chat' ? 'Chat' : type === 'referral' ? 'Referral' : 'Intro'}
+                                </button>
+                              ))}
+                            </div>
+                            <p className="text-xs font-bold text-emerald-600 mb-0 w-full sm:w-auto">{contact.companyNameOrUrl}</p>
+                            {contact.role && <p className="text-[10px] text-slate-400 font-medium">{contact.role}</p>}
+                            {contact.email ? <p className="text-[10px] text-slate-500 font-medium">{contact.email}</p> : null}
                           </div>
                         </div>
-                        <button onClick={() => handleDraftEmail(connectingJob, rec)} disabled={isDrafting === rec.id} className="flex-none bg-emerald-50 text-emerald-600 px-5 py-3 rounded-xl text-[10px] font-black uppercase tracking-widest hover:bg-emerald-600 hover:text-white transition-all disabled:opacity-50">
-                          {isDrafting === rec.id ? 'Thinking...' : (recruiterDrafts[rec.id] ? 'Review Draft' : 'Draft Email')}
-                        </button>
+                        <div className="flex items-center gap-2">
+                          {!contact.email ? (
+                            <button onClick={() => handleFindEmail(contact)} disabled={findingEmailContactId === contact.id} className="bg-slate-100 text-slate-600 px-4 py-2.5 rounded-xl text-[10px] font-black uppercase tracking-widest hover:bg-slate-200 transition-all disabled:opacity-50">
+                              {findingEmailContactId === contact.id ? <i className="fa-solid fa-spinner animate-spin"></i> : null} Find email
+                            </button>
+                          ) : null}
+                          <button onClick={() => handleDraftEmail(connectingJob, contact)} disabled={isDrafting === contact.id} className="flex-none bg-emerald-50 text-emerald-600 px-5 py-3 rounded-xl text-[10px] font-black uppercase tracking-widest hover:bg-emerald-600 hover:text-white transition-all disabled:opacity-50">
+                            {isDrafting === contact.id ? 'Thinking...' : (contactDrafts[contact.id] ? 'Review Draft' : 'Draft Email')}
+                          </button>
+                        </div>
                       </div>
                     ))}
-                    {!(jobRecruiters[connectingJob.id] || []).length && !isDiscovering && (
+                    {!(jobContacts[connectingJob.id] || []).length && (
                       <div className="h-full flex flex-col items-center justify-center p-12 text-center border-4 border-dashed border-slate-100 rounded-[3rem] bg-white/50">
-                        <i className="fa-solid fa-satellite-dish text-4xl text-slate-200 mb-6"></i>
-                        <h4 className="text-xl font-black text-slate-300 tracking-tight">Radar Silent</h4>
-                        <p className="text-slate-400 font-bold mt-2">Run stakeholder discovery to find decision makers at this company.</p>
-                      </div>
-                    )}
-                    {isDiscovering && (
-                      <div className="space-y-4">
-                        {[1, 2, 3].map((i) => (
-                          <div key={i} className="bg-white p-6 rounded-[2rem] animate-pulse border border-slate-100 flex items-center gap-5">
-                            <div className="w-14 h-14 bg-slate-50 rounded-2xl"></div>
-                            <div className="flex-1 space-y-2">
-                              <div className="h-4 bg-slate-50 w-1/4 rounded"></div>
-                              <div className="h-3 bg-slate-50 w-1/3 rounded"></div>
-                              <div className="h-2 bg-slate-50 w-1/2 rounded"></div>
-                            </div>
-                          </div>
-                        ))}
+                        <i className="fa-solid fa-address-book text-4xl text-slate-200 mb-6"></i>
+                        <h4 className="text-xl font-black text-slate-300 tracking-tight">No contacts yet</h4>
+                        <p className="text-slate-400 font-bold mt-2">Add a contact above (first name, last name, company or URL). Then use Find email and Draft email.</p>
                       </div>
                     )}
                   </div>
                   <div className="bg-white rounded-[3rem] border border-slate-100 shadow-2xl flex flex-col overflow-hidden">
                     <div className="p-6 border-b border-slate-50 flex items-center justify-between bg-slate-50/30">
                       <span className="text-[10px] font-black text-slate-400 uppercase tracking-widest">Outreach Workbench</span>
-                      <i className="fa-solid fa-pen-nib text-emerald-400"></i>
+                      <div className="flex items-center gap-2">
+                        {!gmailAccessToken ? (
+                          <button onClick={handleConnectGmail} disabled={gmailConnecting} className="px-3 py-1.5 rounded-lg bg-red-50 text-red-600 text-[10px] font-bold uppercase tracking-wider hover:bg-red-100 transition-all disabled:opacity-50 flex items-center gap-1.5 border border-red-200">
+                            {gmailConnecting ? <i className="fa-solid fa-spinner animate-spin"></i> : <i className="fa-brands fa-google"></i>}
+                            Connect Gmail
+                          </button>
+                        ) : (
+                          <span className="text-[10px] font-bold text-emerald-600 uppercase flex items-center gap-1.5"><i className="fa-brands fa-google"></i> Gmail connected</span>
+                        )}
+                        <i className="fa-solid fa-pen-nib text-emerald-400"></i>
+                      </div>
                     </div>
                     {viewingDraft ? (
-                      <div className="flex-1 flex flex-col overflow-hidden p-8 animate-in fade-in zoom-in-95 duration-300">
-                        <div className="flex items-center gap-4 mb-6 pb-6 border-b border-slate-50">
-                          <img src={viewingDraft.recruiter.avatar} alt="" className="w-12 h-12 rounded-xl" />
-                          <div>
-                            <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest">Direct Contact</p>
-                            <p className="text-xs font-bold text-slate-900">{viewingDraft.recruiter.name} &lt;{viewingDraft.recruiter.email}&gt;</p>
+                      <div className="flex-1 flex flex-col overflow-hidden p-6 animate-in fade-in zoom-in-95 duration-300">
+                        <div className="border border-slate-200 rounded-2xl bg-white shadow-sm overflow-hidden flex flex-col flex-1 min-h-0">
+                          <div className="flex items-center gap-3 px-4 py-3 border-b border-slate-100 bg-slate-50/50">
+                            <span className="text-[10px] font-black text-slate-400 uppercase tracking-widest w-14 shrink-0">To</span>
+                            <span className="text-sm text-slate-700 truncate">{viewingDraft.contact.firstName} {viewingDraft.contact.lastName}{viewingDraft.contact.email ? ` <${viewingDraft.contact.email}>` : ' (no email)'}</span>
+                          </div>
+                          <div className="flex items-center gap-3 px-4 py-3 border-b border-slate-100">
+                            <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest w-14 shrink-0">Subject</label>
+                            <input type="text" value={viewingDraft.draft.subject} onChange={(e) => updateViewingDraft({ subject: e.target.value })} className="flex-1 min-w-0 text-sm font-medium text-slate-800 bg-transparent border-none outline-none placeholder:text-slate-400" placeholder="Email subject" />
+                          </div>
+                          <div className="flex-1 flex flex-col min-h-0 p-4">
+                            <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest mb-2 block">Body</label>
+                            <textarea value={viewingDraft.draft.body} onChange={(e) => updateViewingDraft({ body: e.target.value })} className="flex-1 min-h-[120px] w-full text-sm font-normal leading-relaxed text-slate-700 border border-slate-200 rounded-xl p-4 resize-none outline-none focus:ring-2 focus:ring-emerald-500/20 focus:border-emerald-500 placeholder:text-slate-400" placeholder="Write your message..." />
                           </div>
                         </div>
-                        <div className="flex-1 bg-slate-50 p-8 rounded-3xl border border-slate-100 overflow-y-auto">
-                          <textarea value={viewingDraft.draft} onChange={(e) => setViewingDraft({ ...viewingDraft, draft: e.target.value })} className="w-full h-full bg-transparent text-sm font-medium leading-relaxed text-slate-600 border-none outline-none resize-none" />
-                        </div>
-                        <div className="mt-6 flex gap-3">
-                          <button className="flex-1 bg-emerald-600 text-white py-4 rounded-xl font-black text-xs uppercase tracking-widest shadow-lg shadow-emerald-100 hover:bg-emerald-700 transition-all flex items-center justify-center gap-2">
+                        <div className="mt-4 flex gap-3">
+                          <button className="flex-1 min-w-[140px] bg-emerald-600 text-white py-3 rounded-xl font-black text-xs uppercase tracking-widest shadow-lg shadow-emerald-100 hover:bg-emerald-700 transition-all flex items-center justify-center gap-2">
                             <i className="fa-solid fa-paper-plane"></i>
-                            Send to Recruiter
+                            Send to contact
+                          </button>
+                          <button onClick={handleSaveToGmail} disabled={gmailSaving || !viewingDraft.contact.email} className="px-5 py-3 rounded-xl border border-red-200 bg-red-50 text-red-600 font-black text-xs uppercase tracking-widest hover:bg-red-100 transition-all disabled:opacity-50 flex items-center gap-2" title={!viewingDraft.contact.email ? 'Add contact email first' : 'Save draft to your Gmail'}>
+                            {gmailSaving ? <i className="fa-solid fa-spinner animate-spin"></i> : <i className="fa-brands fa-google"></i>}
+                            Save to Gmail
                           </button>
                           <button onClick={() => setViewingDraft(null)} className="px-6 border border-slate-200 text-slate-400 rounded-xl font-black text-xs uppercase tracking-widest hover:bg-slate-50 transition-all">Dismiss</button>
                         </div>
@@ -1388,10 +1583,20 @@ const App: React.FC = () => {
               </div>
             ) : (
             <>
-            <header className="mb-12">
-              <p className="text-slate-400 font-bold mb-1 text-xs uppercase tracking-[0.3em]">Network Intelligence</p>
-              <h2 className="text-4xl font-black text-[#1a1a3a] tracking-tight">Connect</h2>
-              <p className="text-slate-500 text-sm mt-2">Jobs ready for stakeholder outreach. Save a tailored resume in Customize to add jobs here.</p>
+            <header className="mb-12 flex flex-wrap items-start justify-between gap-4">
+              <div>
+                <p className="text-slate-400 font-bold mb-1 text-xs uppercase tracking-[0.3em]">Network Intelligence</p>
+                <h2 className="text-4xl font-black text-[#1a1a3a] tracking-tight">Connect</h2>
+                <p className="text-slate-500 text-sm mt-2">Jobs ready for stakeholder outreach. Save a tailored resume in Customize to add jobs here.</p>
+              </div>
+              {!gmailAccessToken ? (
+                <button onClick={handleConnectGmail} disabled={gmailConnecting} className="shrink-0 px-5 py-3 rounded-xl bg-red-50 text-red-600 border border-red-200 font-black text-xs uppercase tracking-widest hover:bg-red-100 transition-all disabled:opacity-50 flex items-center gap-2">
+                  {gmailConnecting ? <i className="fa-solid fa-spinner animate-spin"></i> : <i className="fa-brands fa-google"></i>}
+                  Connect Gmail
+                </button>
+              ) : (
+                <span className="shrink-0 px-4 py-2 rounded-xl bg-emerald-50 text-emerald-600 border border-emerald-200 text-xs font-bold uppercase flex items-center gap-2"><i className="fa-brands fa-google"></i> Gmail connected</span>
+              )}
             </header>
             <div className="grid grid-cols-1 gap-4 mb-12">
               {jobs.filter((j) => trackedJobs[j.id] === 'Connect').length > 0 ? (
@@ -1417,34 +1622,35 @@ const App: React.FC = () => {
                 </div>
               )}
             </div>
-            {allRecruiters.length > 0 && (
+            {allContacts.length > 0 && (
               <>
                 <h3 className="text-xl font-black text-slate-900 mb-6">Your Relationship Pipeline</h3>
                 <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-                  {allRecruiters.map((rec) => (
-                    <div key={rec.id} className="bg-white p-8 rounded-[3rem] border border-slate-100 flex flex-col hover:border-emerald-100 transition-all shadow-sm group">
+                  {allContacts.map((c) => (
+                    <div key={c.id} className="bg-white p-8 rounded-[3rem] border border-slate-100 flex flex-col hover:border-emerald-100 transition-all shadow-sm group">
                       <div className="flex items-center gap-5 mb-6">
-                        <img src={rec.avatar} alt="" className="w-16 h-16 rounded-[1.5rem] object-cover border border-slate-100" />
+                        <img src={c.avatar || `https://ui-avatars.com/api/?name=${encodeURIComponent(c.firstName + ' ' + c.lastName)}&background=random&size=200`} alt="" className="w-16 h-16 rounded-[1.5rem] object-cover border border-slate-100" />
                         <div>
-                          <h4 className="text-xl font-black text-slate-900 leading-tight">{rec.name}</h4>
-                          <p className="text-xs font-bold text-emerald-600">{rec.jobCompany}</p>
+                          <h4 className="text-xl font-black text-slate-900 leading-tight">{c.firstName} {c.lastName}</h4>
+                          <p className="text-xs font-bold text-emerald-600">{c.jobCompany}</p>
                         </div>
                       </div>
                       <div className="bg-slate-50 p-4 rounded-2xl mb-6 flex-1">
-                        <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest mb-1">Role & Focus</p>
-                        <p className="text-sm font-bold text-slate-700 leading-snug">{rec.role}</p>
+                        <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest mb-1">Company</p>
+                        <p className="text-sm font-bold text-slate-700 leading-snug">{c.companyNameOrUrl}</p>
+                        {c.role && <p className="text-xs text-slate-500 mt-1">{c.role}</p>}
                       </div>
                       <div className="flex items-center justify-between">
                         <button
                           onClick={() => {
-                            const job = jobs.find((j) => j.company === rec.jobCompany);
-                            if (job) { setConnectingJob(job); setViewingDraft(recruiterDrafts[rec.id] ? { recruiter: rec, draft: recruiterDrafts[rec.id] } : null); }
+                            const job = jobs.find((j) => j.company === c.jobCompany);
+                            if (job) { setConnectingJob(job); setViewingDraft(contactDrafts[c.id] ? { contact: c, draft: contactDrafts[c.id] } : null); }
                           }}
                           className="text-xs font-black uppercase tracking-widest text-indigo-600 hover:underline"
                         >
                           Manage Connection
                         </button>
-                        {recruiterDrafts[rec.id] && (
+                        {contactDrafts[c.id] && (
                           <span className="w-8 h-8 bg-emerald-100 text-emerald-600 rounded-lg flex items-center justify-center text-xs">
                             <i className="fa-solid fa-file-lines"></i>
                           </span>

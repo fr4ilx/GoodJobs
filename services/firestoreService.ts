@@ -1,7 +1,7 @@
 import { doc, setDoc, getDoc, updateDoc, serverTimestamp, deleteField, collection, getDocs, writeBatch } from 'firebase/firestore';
 import { ref, uploadBytes, getDownloadURL } from 'firebase/storage';
 import { db, storage } from '../config/firebase';
-import { UserPreferences, SkillsVisualization, Job, JobAnalysis, TailoredResumeContent } from '../types';
+import { UserPreferences, SkillsVisualization, Job, JobAnalysis, TailoredResumeContent, Contact, OutreachDraft } from '../types';
 
 export interface FileMetadata {
   name: string;
@@ -344,6 +344,108 @@ export const getJobAnalyses = async (userId: string): Promise<Record<string, Job
     } catch {
       return {};
     }
+  }
+};
+
+// ========== Track Flow State (per user) ==========
+
+export interface TrackFlowState {
+  trackedJobs: Record<string, 'Customize' | 'Connect' | 'Apply' | 'Done'>;
+  customizedResumes: Record<string, string>;
+  jobContacts: Record<string, Contact[]>;
+  contactDrafts: Record<string, OutreachDraft>;
+}
+
+const TRACK_FLOW_STORAGE_KEY = (uid: string) => `goodjobs_track_flow_${uid}`;
+
+/** Normalize contactDrafts: legacy string → { subject: '', body } */
+function normalizeContactDrafts(raw: Record<string, unknown> | undefined): Record<string, OutreachDraft> {
+  if (!raw || typeof raw !== 'object') return {};
+  const out: Record<string, OutreachDraft> = {};
+  for (const [id, val] of Object.entries(raw)) {
+    if (typeof val === 'string') out[id] = { subject: '', body: val };
+    else if (val && typeof val === 'object' && 'body' in val) out[id] = { subject: String((val as OutreachDraft).subject ?? ''), body: String((val as OutreachDraft).body ?? '') };
+  }
+  return out;
+}
+
+/** Migrate legacy jobRecruiters (Recruiter[]) to jobContacts (Contact[]). */
+export function migrateJobRecruitersToContacts(
+  jobRecruiters: Record<string, { id: string; name: string; email?: string; role?: string; avatar?: string; relevance?: string }[]> | undefined
+): Record<string, Contact[]> {
+  if (!jobRecruiters || typeof jobRecruiters !== 'object') return {};
+  const out: Record<string, Contact[]> = {};
+  for (const [jobId, recs] of Object.entries(jobRecruiters)) {
+    if (!Array.isArray(recs)) continue;
+    out[jobId] = recs.map((r) => {
+      const parts = (r.name || '').trim().split(/\s+/);
+      const firstName = parts[0] ?? '';
+      const lastName = parts.slice(1).join(' ') ?? '';
+      return {
+        id: r.id,
+        firstName,
+        lastName,
+        companyNameOrUrl: '',
+        email: r.email,
+        role: r.role,
+        avatar: r.avatar
+      };
+    });
+  }
+  return out;
+}
+
+/** Save track flow state to Firestore. Debounce calls from the caller. */
+export const saveTrackFlowState = async (userId: string, state: TrackFlowState): Promise<void> => {
+  try {
+    const ref = doc(db, 'users', userId, 'trackFlow', 'state');
+    await setDoc(ref, {
+      ...state,
+      updatedAt: serverTimestamp()
+    });
+  } catch {
+    try {
+      localStorage.setItem(TRACK_FLOW_STORAGE_KEY(userId), JSON.stringify(state));
+    } catch (e) {
+      console.error('Track flow save failed:', e);
+      throw e;
+    }
+  }
+};
+
+/** Get track flow state from Firestore. Falls back to localStorage. */
+export const getTrackFlowState = async (userId: string): Promise<TrackFlowState | null> => {
+  try {
+    const ref = doc(db, 'users', userId, 'trackFlow', 'state');
+    const snap = await getDoc(ref);
+    if (snap.exists()) {
+      const d = snap.data();
+      const jobContacts = d.jobContacts ?? migrateJobRecruitersToContacts(d.jobRecruiters);
+      const contactDrafts = normalizeContactDrafts((d.contactDrafts ?? d.recruiterDrafts) as Record<string, unknown>);
+      return {
+        trackedJobs: d.trackedJobs ?? {},
+        customizedResumes: d.customizedResumes ?? {},
+        jobContacts: jobContacts ?? {},
+        contactDrafts
+      };
+    }
+  } catch {
+    /* fall through */
+  }
+  try {
+    const stored = localStorage.getItem(TRACK_FLOW_STORAGE_KEY(userId));
+    if (!stored) return null;
+    const parsed = JSON.parse(stored);
+    const jobContacts = parsed.jobContacts ?? migrateJobRecruitersToContacts(parsed.jobRecruiters);
+    const contactDrafts = normalizeContactDrafts((parsed.contactDrafts ?? parsed.recruiterDrafts) as Record<string, unknown>);
+    return {
+      trackedJobs: parsed.trackedJobs ?? {},
+      customizedResumes: parsed.customizedResumes ?? {},
+      jobContacts: jobContacts ?? {},
+      contactDrafts
+    };
+  } catch {
+    return null;
   }
 };
 

@@ -46,6 +46,26 @@ export interface Recruiter {
   relevance: string;
 }
 
+/** Manual networking contact (add by name + company; optional Find email via Apollo; Draft email via Gemini). */
+export interface Contact {
+  id: string;
+  firstName: string;
+  lastName: string;
+  companyNameOrUrl: string;
+  email?: string;
+  role?: string;
+  avatar?: string;
+}
+
+/** Outreach email draft: subject + body (Gmail-style). */
+export interface OutreachDraft {
+  subject: string;
+  body: string;
+}
+
+/** Type of outreach email to draft. */
+export type OutreachEmailType = 'coffee-chat' | 'referral' | 'hiring-manager-intro';
+
 export interface UserProfile {
   name: string;
   resumeContent: string;
@@ -171,5 +191,5 @@ export interface TailoredResumeContent {
   experiences: Array<{ company: string; title: string; location?: string; dates: string; bullets: string[] }>;
   projects: Array<{ name: string; type?: string; dates?: string; bullets: string[] }>;
   skills: string[];
-  education?: { school: string; degree: string; major?: string; year: string };
+  education?: Array<{ school: string; degree: string; major?: string; year: string }>;
 }
