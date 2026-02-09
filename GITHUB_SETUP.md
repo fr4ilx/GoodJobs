@@ -60,6 +60,7 @@ The system supports these GitHub URL formats:
 - `https://github.com/owner/repo` - Fetches README and important files
 - `https://github.com/owner/repo/tree/branch/path` - Fetches specific directory
 - `https://github.com/owner/repo/blob/branch/path/to/file` - Fetches specific file
+- `https://github.com/username` - **Profile URLs**: Fetches READMEs from the user's top 5 public repos (by last updated)
 
 ## Troubleshooting
 
@@ -72,5 +73,5 @@ The system supports these GitHub URL formats:
 - Wait for the rate limit to reset (usually 1 hour)
 
 ### "Invalid GitHub URL format"
-- Make sure the URL is a valid GitHub repository URL
-- Check that the repository exists and is accessible
+- Use a repository URL (`github.com/owner/repo`) or profile URL (`github.com/username`)
+- Check that the repository or user exists and is accessible

@@ -18,6 +18,21 @@ interface GitHubRepoInfo {
 }
 
 /**
+ * Check if URL is a GitHub profile (username only)
+ * e.g. https://github.com/fr4ilx or https://github.com/fr4ilx/
+ */
+export function isGitHubProfileUrl(url: string): boolean {
+  try {
+    const urlObj = new URL(url);
+    if (urlObj.hostname !== 'github.com' && urlObj.hostname !== 'www.github.com') return false;
+    const parts = urlObj.pathname.split('/').filter(Boolean);
+    return parts.length === 1;
+  } catch {
+    return false;
+  }
+}
+
+/**
  * Parse GitHub URL to extract owner, repo, and optional path
  * Supports formats:
  * - https://github.com/owner/repo
@@ -207,18 +222,77 @@ async function fetchDirectoryContents(owner: string, repo: string, path?: string
 }
 
 /**
+ * Fetch content for a GitHub profile URL (username only)
+ * Lists public repos and fetches READMEs from top repos
+ */
+async function fetchProfileContent(username: string): Promise<{ content: string; accessible: boolean; reason?: string }> {
+  try {
+    const headers = getGitHubHeaders();
+    const reposResponse = await fetch(
+      `https://api.github.com/users/${username}/repos?sort=updated&per_page=5`,
+      { headers }
+    );
+
+    if (!reposResponse.ok) {
+      if (reposResponse.status === 404) {
+        return { content: '', accessible: false, reason: 'GitHub user not found' };
+      }
+      if (reposResponse.status === 403 || reposResponse.headers.get('x-ratelimit-remaining') === '0') {
+        return { content: '', accessible: false, reason: 'GitHub API rate limit exceeded. Add VITE_GITHUB_TOKEN to .env.local for higher limits.' };
+      }
+      return { content: '', accessible: false, reason: `GitHub API error: ${reposResponse.status}` };
+    }
+
+    const repos: { name: string; full_name: string }[] = await reposResponse.json();
+    if (repos.length === 0) {
+      return {
+        content: `GitHub Profile: ${username}\n\nNo public repositories found.`,
+        accessible: true
+      };
+    }
+
+    const parts: string[] = [`GitHub Profile: ${username}\nRepositories: ${repos.map(r => r.full_name).join(', ')}\n`];
+    for (const r of repos) {
+      const readme = await fetchReadme(r.full_name.split('/')[0], r.name);
+      if (readme) {
+        parts.push(`\n--- Repository: ${r.full_name} ---\n${readme}\n`);
+      }
+    }
+
+    const content = parts.join('');
+    return {
+      content: content.trim().length > 0 ? content : `GitHub Profile: ${username}\n\nNo README content found in top repos.`,
+      accessible: true
+    };
+  } catch (error: any) {
+    return {
+      content: '',
+      accessible: false,
+      reason: error?.message || 'Failed to fetch GitHub profile'
+    };
+  }
+}
+
+/**
  * Fetch GitHub repository content for analysis
  * Returns the content as a string, or null if inaccessible
- * @param url - GitHub repository URL
+ * Supports repo URLs (github.com/owner/repo) and profile URLs (github.com/username)
+ * @param url - GitHub repository or profile URL
  */
 export async function fetchGitHubContent(url: string): Promise<{ content: string; accessible: boolean; reason?: string }> {
   try {
+    // Handle profile URLs first (github.com/username)
+    if (isGitHubProfileUrl(url)) {
+      const username = new URL(url).pathname.split('/').filter(Boolean)[0];
+      return fetchProfileContent(username);
+    }
+
     const repoInfo = parseGitHubUrl(url);
     if (!repoInfo) {
       return {
         content: '',
         accessible: false,
-        reason: 'Invalid GitHub URL format'
+        reason: 'Invalid GitHub URL. Use a repository URL (github.com/owner/repo) or profile URL (github.com/username).'
       };
     }
 

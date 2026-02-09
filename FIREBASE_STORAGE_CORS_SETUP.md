@@ -74,7 +74,7 @@ If you get permission errors:
 
 ## For Production
 
-When deploying to production, update `cors.json` to include your production domain:
+The `cors.json` file already includes production domains. If you add a new domain, update it and re-apply:
 
 ```json
 [
@@ -85,7 +85,10 @@ When deploying to production, update `cors.json` to include your production doma
       "http://localhost:5173",
       "http://127.0.0.1:3000",
       "http://127.0.0.1:3001",
-      "https://your-production-domain.com"
+      "https://job-studio.net",
+      "https://www.job-studio.net",
+      "https://goodjobs-5f53a.web.app",
+      "https://goodjobs-5f53a.firebaseapp.com"
     ],
     "method": ["GET", "HEAD", "OPTIONS"],
     "responseHeader": ["Content-Type", "Content-Length", "Access-Control-Allow-Origin"],
@@ -95,3 +98,11 @@ When deploying to production, update `cors.json` to include your production doma
 ```
 
 Then run the same `gcloud storage buckets update` command again.
+
+## Important: Apply CORS for PDF Extraction
+
+If you see **"Firebase Storage request timeout"** or **"Could not extract text from PDF"** when using Apply Changes on the Resume page:
+
+1. Ensure CORS is configured with your app's origin (including production domain)
+2. Run: `gcloud storage buckets update gs://goodjobs-5f53a.firebasestorage.app --cors-file=cors.json`
+3. Refresh the app and try again

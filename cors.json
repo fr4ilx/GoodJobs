@@ -5,7 +5,11 @@
       "http://localhost:3001",
       "http://localhost:5173",
       "http://127.0.0.1:3000",
-      "http://127.0.0.1:3001"
+      "http://127.0.0.1:3001",
+      "https://job-studio.net",
+      "https://www.job-studio.net",
+      "https://goodjobs-5f53a.web.app",
+      "https://goodjobs-5f53a.firebaseapp.com"
     ],
     "method": ["GET", "HEAD", "OPTIONS"],
     "responseHeader": ["Content-Type", "Content-Length", "Access-Control-Allow-Origin"],

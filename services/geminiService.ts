@@ -1,7 +1,7 @@
 
 import { GoogleGenAI, Type } from "@google/genai";
 import { SkillsVisualization, Recruiter, JobAnalysis, Job, TailoredResumeContent } from "../types";
-import { fetchGitHubContent, parseGitHubUrl } from "./githubService";
+import { fetchGitHubContent, isGitHubProfileUrl, parseGitHubUrl } from "./githubService";
 import { extractTextFromPDF } from "./pdfService";
 
 /**
@@ -141,7 +141,7 @@ export async function analyzeSkills(
     
     // Process each link
     for (const link of projectLinks) {
-      const isGitHub = parseGitHubUrl(link);
+      const isGitHub = parseGitHubUrl(link) || isGitHubProfileUrl(link);
       
       if (isGitHub) {
         // Try to fetch GitHub content to pass to LLM
@@ -218,7 +218,7 @@ Return ONLY valid JSON matching the exact schema provided.`;
   // GitHub content can be huge, so chunk if we have more than 2 GitHub links
   let githubLinkCount = 0;
   for (const link of projectLinks) {
-    if (parseGitHubUrl(link)) {
+    if (parseGitHubUrl(link) || isGitHubProfileUrl(link)) {
       githubLinkCount++;
     }
   }
@@ -359,7 +359,7 @@ Return ONLY valid JSON matching the exact schema provided.`;
     const MAX_CHUNK_SIZE = 25000; // Max characters per chunk for GitHub content
     
     const projectLinkPromises = projectLinks.map(async (link) => {
-      const isGitHub = parseGitHubUrl(link);
+      const isGitHub = parseGitHubUrl(link) || isGitHubProfileUrl(link);
       let linkChunks: DataChunk[] = [];
       
       if (isGitHub) {
@@ -931,7 +931,7 @@ Return ONLY valid JSON matching the exact schema provided.`;
       // Project links with GitHub content and splitting
       const MAX_CHUNK_SIZE = 25000;
       for (const link of projectLinks) {
-        const isGitHub = parseGitHubUrl(link);
+        const isGitHub = parseGitHubUrl(link) || isGitHubProfileUrl(link);
         if (isGitHub) {
           try {
             const githubContent = await fetchGitHubContent(link);
@@ -2046,8 +2046,9 @@ Examples:
 KEYWORD TARGET (CRITICAL - YOU MUST REACH 85%+): Target 85%+ keyword match. Rules:
 1. DO NOT change or remove the candidate's existing experiences, projects, or bullets. Preserve everything they have.
 2. ADD as many new bullets as needed to hit 85%+ - you may add 2-3 extra bullets per experience/project. Weave missing keywords into NEW bullets. Incorporate synonyms and related terms: NoSQL/relational→databases, Kafka→messaging systems, LlamaIndex/Haystack→RAG/LLM libraries/vector, TensorFlow→PyTorch/ML frameworks, etc. If they use Python for ML, add TensorFlow/LLM libraries where it fits. Every blue/missing keyword that can reasonably fit MUST be woven in.
-3. Be realistic: no exaggerated claims (e.g., "saved $20M"). Use credible metrics.
-4. Every bullet: XYZ format. Accomplished [X] as measured by [Y], by doing [Z].
+3. STANDALONE WORDS ONLY: Each keyword MUST appear as a full/standalone word, NEVER as a substring inside another word. Example: "go" (the language) must appear as "Go" or "Golang"—not inside "Google", "ago", or "undergo". Use full forms (Golang, Kubernetes, TypeScript) when the short form is ambiguous. A keyword is only counted if it appears as its own word.
+4. Be realistic: no exaggerated claims (e.g., "saved $20M"). Use credible metrics.
+5. Every bullet: XYZ format. Accomplished [X] as measured by [Y], by doing [Z].
 
 OUTPUT RULES - NO INTERNAL THINKING:
 - Output ONLY the final clean data. NEVER include reasoning, inference notes, or chain-of-thought in any JSON field.

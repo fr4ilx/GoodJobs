@@ -17,7 +17,7 @@ import { findEmailViaApollo } from './services/apolloService';
 import { requestGmailAccess, createGmailDraft, isGmailConfigured } from './services/gmailService';
 import { useAuth } from './contexts/AuthContext';
 import { logOut } from './services/authService';
-import { saveUserPreferences, saveResumeData, saveUserProfile, getUserProfile, deleteResumeFile, deleteProjectFile, deleteProjectLink, FileMetadata, saveSkillsVisualization, seedJobsIfEmpty, getJobs, getJobAnalyses, saveJobAnalysis, saveTrackFlowState, getTrackFlowState, migrateJobRecruitersToContacts } from './services/firestoreService';
+import { saveUserPreferences, saveResumeData, saveUserProfile, getUserProfile, deleteResumeFile, deleteProjectFile, deleteProjectLink, FileMetadata, saveSkillsVisualization, seedJobsIfEmpty, getJobs, getJobAnalyses, saveJobAnalysis, saveTrackFlowState, getTrackFlowState, migrateJobRecruitersToContacts, clearUserCacheForDemo } from './services/firestoreService';
 import { fetchJobsWithFilters } from './services/apifyService';
 
 import { MOCK_JOBS } from './constants';
@@ -77,6 +77,7 @@ const App: React.FC = () => {
   const [isValidatingApiKey, setIsValidatingApiKey] = useState(false);
   const [apiKeyValidationResult, setApiKeyValidationResult] = useState<{ valid: boolean; error?: string } | null>(null); 
   const [isGettingMatchingScore, setIsGettingMatchingScore] = useState(false);
+  const [isResettingDemo, setIsResettingDemo] = useState(false);
   
   const [jobs, setJobs] = useState<Job[]>([]);
   const [jobsLoading, setJobsLoading] = useState(false);
@@ -304,7 +305,7 @@ const App: React.FC = () => {
         jobContacts,
         contactDrafts
       }).catch(() => {});
-    }, 600);
+    }, 250);
     return () => clearTimeout(t);
   }, [trackedJobs, customizedResumes, jobContacts, contactDrafts, currentUser?.uid]);
 
@@ -580,6 +581,21 @@ const App: React.FC = () => {
     }
   };
 
+  const handleResetForDemo = async () => {
+    if (!currentUser) return;
+    if (!window.confirm('Clear all track flow, job analyses, and tailored resumes so you can run a fresh demo? Your profile and resume data will be kept.')) return;
+    setIsResettingDemo(true);
+    try {
+      await clearUserCacheForDemo(currentUser.uid);
+      window.location.reload();
+    } catch (e) {
+      console.error('Reset for demo failed:', e);
+      alert('Reset failed. Check console.');
+    } finally {
+      setIsResettingDemo(false);
+    }
+  };
+
   const handleSignOut = async () => {
     try {
       await logOut();
@@ -699,18 +715,33 @@ const App: React.FC = () => {
 
   const isMatching = analysisProgress !== null;
 
+  const persistTrackFlow = (nextTrackedJobs: Record<string, TrackStatus>) => {
+    if (currentUser?.uid) {
+      saveTrackFlowState(currentUser.uid, {
+        trackedJobs: nextTrackedJobs,
+        customizedResumes,
+        jobContacts,
+        contactDrafts
+      }).catch(() => {});
+    }
+  };
+
   const trackJob = (id: string) => {
-    if (!trackedJobs[id]) setTrackedJobs((prev) => ({ ...prev, [id]: 'Customize' }));
+    if (trackedJobs[id]) return;
+    const next: Record<string, TrackStatus> = { ...trackedJobs, [id]: 'Customize' };
+    setTrackedJobs(next);
+    persistTrackFlow(next);
   };
   const moveJob = (id: string, status: TrackStatus) => {
-    setTrackedJobs((prev) => ({ ...prev, [id]: status }));
+    const next: Record<string, TrackStatus> = { ...trackedJobs, [id]: status };
+    setTrackedJobs(next);
+    persistTrackFlow(next);
   };
   const untrackJob = (id: string) => {
-    setTrackedJobs((prev) => {
-      const next = { ...prev };
-      delete next[id];
-      return next;
-    });
+    const next: Record<string, TrackStatus> = { ...trackedJobs };
+    delete next[id];
+    setTrackedJobs(next);
+    persistTrackFlow(next);
   };
   const handleTailor = async (job: Job) => {
     if (!userProfile.resumeContent) return;
@@ -1105,7 +1136,7 @@ const App: React.FC = () => {
 
   return (
     <div className="min-h-screen bg-[#f8f9fe] animate-in fade-in duration-1000">
-      <Sidebar activeItem={activeNav} onNavigate={handleNavigate} onSignOut={handleSignOut} />
+      <Sidebar activeItem={activeNav} onNavigate={handleNavigate} onSignOut={handleSignOut} onResetForDemo={handleResetForDemo} isResettingDemo={isResettingDemo} />
 
       <main className={`ml-72 p-12 ${activeNav === NavItem.Track || activeNav === NavItem.Customize ? 'w-[calc(100vw-18rem)] max-w-none' : 'max-w-7xl mx-auto'}`}>
         {activeNav === NavItem.Jobs && (
@@ -1229,6 +1260,10 @@ const App: React.FC = () => {
                   moveJob(jobId, 'Connect');
                   setCustomizingJob(null);
                 }}
+                onSkipToApply={(jobId) => {
+                  moveJob(jobId, 'Apply');
+                  setCustomizingJob(null);
+                }}
               />
             ) : connectingJob ? (
               <div className="animate-in slide-in-from-right-12 duration-500 max-w-7xl mx-auto h-[calc(100vh-100px)] flex flex-col">
@@ -1246,6 +1281,9 @@ const App: React.FC = () => {
                     <button onClick={() => { moveJob(connectingJob.id, 'Apply'); setConnectingJob(null); }} className="bg-slate-900 text-white px-6 py-3 rounded-xl font-black text-xs uppercase tracking-widest flex items-center gap-3 hover:bg-slate-800 transition-all shadow-xl">
                       Move to Apply
                       <i className="fa-solid fa-arrow-right"></i>
+                    </button>
+                    <button onClick={() => { moveJob(connectingJob.id, 'Done'); setConnectingJob(null); }} className="bg-slate-100 text-slate-600 px-5 py-3 rounded-xl font-bold text-xs uppercase tracking-widest flex items-center gap-2 hover:bg-slate-200 transition-all border border-slate-200">
+                      Skip to Done
                     </button>
                   </div>
                 </header>
@@ -1371,6 +1409,7 @@ const App: React.FC = () => {
                         onClick={() => setCustomizingJob(job)}
                         isTracked={true}
                         onRemove={() => untrackJob(job.id)}
+                        onSkipToApply={() => moveJob(job.id, 'Apply')}
                       />
                     ))
                   ) : (
@@ -1429,6 +1468,16 @@ const App: React.FC = () => {
                                   {job.analysis?.keywordMatchScore !== undefined && (
                                     <span className="inline-block mt-2 px-2 py-0.5 bg-indigo-50 text-indigo-600 rounded text-[10px] font-black">{job.analysis.keywordMatchScore}% match</span>
                                   )}
+                                  {s.key === 'Customize' && (
+                                    <button onClick={(e) => { e.stopPropagation(); moveJob(job.id, 'Apply'); }} className="mt-2 w-full py-1.5 rounded-lg bg-slate-100 text-slate-600 text-[10px] font-bold uppercase tracking-widest hover:bg-slate-200 transition-all border border-slate-200">
+                                      Skip to Apply
+                                    </button>
+                                  )}
+                                  {s.key === 'Connect' && (
+                                    <button onClick={(e) => { e.stopPropagation(); moveJob(job.id, 'Done'); }} className="mt-2 w-full py-1.5 rounded-lg bg-slate-100 text-slate-600 text-[10px] font-bold uppercase tracking-widest hover:bg-slate-200 transition-all border border-slate-200">
+                                      Skip to Done
+                                    </button>
+                                  )}
                                   {s.key === 'Apply' && (
                                     <button onClick={(e) => { e.stopPropagation(); moveJob(job.id, 'Done'); }} className="mt-3 w-full py-2 rounded-lg bg-blue-600 text-white text-xs font-black uppercase tracking-widest hover:bg-blue-700 transition-all">
                                       Apply
@@ -1472,6 +1521,9 @@ const App: React.FC = () => {
                     <button onClick={() => { moveJob(connectingJob.id, 'Apply'); setConnectingJob(null); }} className="bg-slate-900 text-white px-6 py-3 rounded-xl font-black text-xs uppercase tracking-widest flex items-center gap-3 hover:bg-slate-800 transition-all shadow-xl">
                       Move to Apply
                       <i className="fa-solid fa-arrow-right"></i>
+                    </button>
+                    <button onClick={() => { moveJob(connectingJob.id, 'Done'); setConnectingJob(null); }} className="bg-slate-100 text-slate-600 px-5 py-3 rounded-xl font-bold text-xs uppercase tracking-widest flex items-center gap-2 hover:bg-slate-200 transition-all border border-slate-200">
+                      Skip to Done
                     </button>
                   </div>
                 </header>
@@ -2303,7 +2355,15 @@ const App: React.FC = () => {
                );
              })()}
 
-             <div className="pt-4 flex gap-4">
+             <div className="pt-4 flex flex-col gap-4">
+               <button 
+                  onClick={handleResetForDemo}
+                  disabled={isResettingDemo}
+                  className="w-full bg-amber-50 text-amber-700 py-4 rounded-[2rem] font-bold text-sm hover:bg-amber-100 transition-all flex items-center justify-center gap-2 border-2 border-amber-200 disabled:opacity-50"
+               >
+                 <i className="fa-solid fa-rotate-right"></i>
+                 {isResettingDemo ? 'Clearing...' : 'Reset for Demo'}
+               </button>
                <button 
                   onClick={handleSignOut}
                   className="flex-1 bg-rose-50 text-rose-600 py-5 rounded-[2rem] font-black text-lg hover:bg-rose-100 transition-all flex items-center justify-center gap-3"
@@ -2327,6 +2387,11 @@ const App: React.FC = () => {
             setSelectedJob(null);
           }}
           isTracked={!!trackedJobs[selectedJob.id]}
+          trackStatus={trackedJobs[selectedJob.id]}
+          onMarkApplied={() => {
+            moveJob(selectedJob.id, 'Done');
+            setSelectedJob(null);
+          }}
           mySkills={skillsVisualization?.all_skills}
         />
       )}

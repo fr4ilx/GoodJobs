@@ -8,9 +8,10 @@ interface JobCardProps {
   onTrack?: () => void;
   isTracked?: boolean;
   onRemove?: () => void;  // When provided, shows red X on hover to remove from board
+  onSkipToApply?: () => void;  // When provided, shows Skip to Apply button (for Customize tab)
 }
 
-const JobCard: React.FC<JobCardProps> = ({ job, onClick, onTrack, isTracked, onRemove }) => {
+const JobCard: React.FC<JobCardProps> = ({ job, onClick, onTrack, isTracked, onRemove, onSkipToApply }) => {
   const hasLogo = !!job.logo && job.logo.startsWith('http');
   return (
     <div 
@@ -56,6 +57,15 @@ const JobCard: React.FC<JobCardProps> = ({ job, onClick, onTrack, isTracked, onR
         )}
         
         <div className="flex items-center gap-3">
+          {onSkipToApply && (
+            <button
+              onClick={(e) => { e.stopPropagation(); onSkipToApply(); }}
+              className="px-4 py-2.5 rounded-xl bg-slate-100 text-slate-600 text-[10px] font-bold uppercase tracking-widest hover:bg-slate-200 transition-all border border-slate-200"
+              title="Skip Connect, move to Apply"
+            >
+              Skip to Apply
+            </button>
+          )}
           {onTrack && (
             <button 
               onClick={(e) => {

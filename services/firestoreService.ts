@@ -1,4 +1,4 @@
-import { doc, setDoc, getDoc, updateDoc, serverTimestamp, deleteField, collection, getDocs, writeBatch } from 'firebase/firestore';
+import { doc, setDoc, getDoc, updateDoc, serverTimestamp, deleteField, collection, getDocs, writeBatch, deleteDoc } from 'firebase/firestore';
 import { ref, uploadBytes, getDownloadURL } from 'firebase/storage';
 import { db, storage } from '../config/firebase';
 import { UserPreferences, SkillsVisualization, Job, JobAnalysis, TailoredResumeContent, Contact, OutreachDraft } from '../types';
@@ -515,5 +515,63 @@ export const getTailoredResume = async (
     return map[jobId] ?? null;
   } catch {
     return null;
+  }
+};
+
+/**
+ * Clear all cached/demo data for a user so they can run a fresh demo.
+ * Clears: track flow, job analyses, tailored resumes (Firestore + localStorage).
+ * Does NOT clear: user profile, resume content, uploaded files.
+ */
+export const clearUserCacheForDemo = async (userId: string): Promise<void> => {
+  const prefix = `goodjobs_track_${userId}_`;
+  const keysToRemove: string[] = [
+    prefix + 'tracked',
+    prefix + 'resumes',
+    prefix + 'contacts',
+    prefix + 'contactDrafts',
+    prefix + 'recruiters',
+    prefix + 'drafts',
+    TRACK_FLOW_STORAGE_KEY(userId),
+    JOB_ANALYSES_STORAGE_KEY(userId),
+    TAILORED_RESUMES_STORAGE_KEY(userId)
+  ];
+  keysToRemove.forEach(k => localStorage.removeItem(k));
+  for (let i = localStorage.length - 1; i >= 0; i--) {
+    const key = localStorage.key(i);
+    if (key && key.startsWith('goodjobs_') && key.includes(userId)) {
+      localStorage.removeItem(key);
+    }
+  }
+
+  try {
+    const userRef = doc(db, 'users', userId);
+    await updateDoc(userRef, { skillsVisualization: deleteField() });
+  } catch (e) {
+    console.warn('clearUserCacheForDemo: skillsVisualization clear', e);
+  }
+  try {
+    const trackFlowRef = doc(db, 'users', userId, 'trackFlow', 'state');
+    await deleteDoc(trackFlowRef);
+  } catch (e) {
+    console.warn('clearUserCacheForDemo: trackFlow delete', e);
+  }
+  try {
+    const jobAnalysesRef = collection(db, 'users', userId, 'jobAnalyses');
+    const snap = await getDocs(jobAnalysesRef);
+    const batch = writeBatch(db);
+    snap.docs.forEach(d => batch.delete(d.ref));
+    if (snap.size > 0) await batch.commit();
+  } catch (e) {
+    console.warn('clearUserCacheForDemo: jobAnalyses delete', e);
+  }
+  try {
+    const tailoredRef = collection(db, 'users', userId, 'tailoredResumes');
+    const snap = await getDocs(tailoredRef);
+    const batch = writeBatch(db);
+    snap.docs.forEach(d => batch.delete(d.ref));
+    if (snap.size > 0) await batch.commit();
+  } catch (e) {
+    console.warn('clearUserCacheForDemo: tailoredResumes delete', e);
   }
 };

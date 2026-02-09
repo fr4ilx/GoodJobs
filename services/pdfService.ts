@@ -38,12 +38,15 @@ export async function extractTextFromPDF(pdfUrl: string): Promise<{ text: string
         console.log(`📄 Using Firebase Storage SDK for path: ${storagePath}`);
         
         try {
-          // Use getDownloadURL first - this gives us an authenticated URL that bypasses CORS
+          // Use getDownloadURL first - this gives us an authenticated URL
           const storageRef = ref(storage, storagePath);
           const downloadURL = await getDownloadURL(storageRef);
           
-          // Fetch using the authenticated download URL
-          const response = await fetch(downloadURL);
+          // Fetch using the authenticated download URL (with timeout)
+          const controller = new AbortController();
+          const timeoutId = setTimeout(() => controller.abort(), 45000);
+          const response = await fetch(downloadURL, { signal: controller.signal });
+          clearTimeout(timeoutId);
           if (!response.ok) {
             throw new Error(`Failed to fetch PDF: ${response.status} ${response.statusText}`);
           }
@@ -58,7 +61,7 @@ export async function extractTextFromPDF(pdfUrl: string): Promise<{ text: string
           try {
             const storageRef = ref(storage, storagePath);
             const timeoutPromise = new Promise<never>((_, reject) => 
-              setTimeout(() => reject(new Error('Firebase Storage request timeout')), 30000)
+              setTimeout(() => reject(new Error('Firebase Storage request timeout')), 60000)
             );
             
             const bytes = await Promise.race([

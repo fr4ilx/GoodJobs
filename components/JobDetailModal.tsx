@@ -2,15 +2,19 @@
 import React from 'react';
 import { Job } from '../types';
 
+type TrackStatus = 'Customize' | 'Connect' | 'Apply' | 'Done';
+
 interface JobDetailModalProps {
   job: Job;
   onClose: () => void;
   onTrack?: () => void;
   isTracked?: boolean;
+  trackStatus?: TrackStatus;
+  onMarkApplied?: () => void;
   mySkills?: string[];
 }
 
-const JobDetailModal: React.FC<JobDetailModalProps> = ({ job, onClose, onTrack, isTracked, mySkills = [] }) => {
+const JobDetailModal: React.FC<JobDetailModalProps> = ({ job, onClose, onTrack, isTracked, trackStatus, onMarkApplied, mySkills = [] }) => {
   const mySkillsSet = new Set(mySkills.map(s => s.toLowerCase().trim()));
   const analysis = job.analysis;
   const matchedKeywords = analysis?.keywords?.filter(k => mySkillsSet.has(k.toLowerCase().trim())) ?? [];
@@ -167,48 +171,76 @@ const JobDetailModal: React.FC<JobDetailModalProps> = ({ job, onClose, onTrack, 
         </div>
 
         {/* Footer Actions */}
-        <div className="p-8 bg-slate-50 border-t border-slate-100 flex gap-4 flex-shrink-0">
-          {onTrack && (
-            <button 
-              onClick={onTrack}
-              disabled={!!isTracked}
-              className={`flex-1 py-5 rounded-2xl font-black text-lg shadow-xl transition-all text-center flex items-center justify-center gap-3 ${
-                isTracked 
-                  ? 'bg-emerald-50 border-2 border-emerald-200 text-emerald-600 shadow-emerald-100' 
-                  : 'bg-indigo-600 text-white shadow-indigo-100 hover:bg-indigo-700 hover:scale-[1.02] active:scale-[0.98]'
-              }`}
-            >
-              {isTracked ? (
-                <>
-                  <i className="fa-solid fa-check text-xl"></i>
-                  Tracked
-                </>
-              ) : (
-                <>
-                  <i className="fa-solid fa-list-check text-xl"></i>
-                  Track Job
-                </>
+        <div className="p-8 bg-slate-50 border-t border-slate-100 flex gap-4 flex-shrink-0 flex-wrap">
+          {trackStatus === 'Apply' && onMarkApplied ? (
+            <>
+              <button
+                onClick={() => {
+                  if (job.jobUrl) window.open(job.jobUrl, '_blank');
+                  onMarkApplied();
+                }}
+                className="flex-1 min-w-[280px] py-6 rounded-2xl font-black text-xl uppercase tracking-widest shadow-2xl transition-all text-center flex items-center justify-center gap-4 bg-blue-600 text-white shadow-blue-200 hover:bg-blue-700 hover:scale-[1.02] active:scale-[0.98]"
+              >
+                <i className="fa-solid fa-paper-plane text-2xl"></i>
+                Apply
+              </button>
+              {job.jobUrl && (
+                <a
+                  href={job.jobUrl}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="px-8 py-5 rounded-2xl font-black text-sm border-2 border-slate-200 text-slate-600 hover:bg-slate-100 hover:border-slate-300 transition-all flex items-center justify-center gap-2"
+                >
+                  <i className="fa-solid fa-external-link"></i>
+                  Open job link
+                </a>
               )}
-            </button>
-          )}
-          {job.jobUrl ? (
-            <a 
-              href={job.jobUrl}
-              target="_blank"
-              rel="noopener noreferrer"
-              className="px-8 py-5 rounded-2xl font-black text-sm border-2 border-slate-200 text-slate-600 hover:bg-slate-100 hover:border-slate-300 transition-all flex items-center justify-center gap-2"
-            >
-              <i className="fa-solid fa-external-link"></i>
-              Apply Now
-            </a>
+            </>
           ) : (
-            <button 
-              disabled
-              className="px-8 py-5 rounded-2xl font-black text-sm border-2 border-slate-100 text-slate-300 cursor-not-allowed"
-            >
-              <i className="fa-solid fa-external-link mr-2"></i>
-              Apply Now
-            </button>
+            <>
+              {onTrack && (
+                <button 
+                  onClick={onTrack}
+                  disabled={!!isTracked}
+                  className={`flex-1 py-5 rounded-2xl font-black text-lg shadow-xl transition-all text-center flex items-center justify-center gap-3 ${
+                    isTracked 
+                      ? 'bg-emerald-50 border-2 border-emerald-200 text-emerald-600 shadow-emerald-100' 
+                      : 'bg-indigo-600 text-white shadow-indigo-100 hover:bg-indigo-700 hover:scale-[1.02] active:scale-[0.98]'
+                  }`}
+                >
+                  {isTracked ? (
+                    <>
+                      <i className="fa-solid fa-check text-xl"></i>
+                      Tracked
+                    </>
+                  ) : (
+                    <>
+                      <i className="fa-solid fa-list-check text-xl"></i>
+                      Track Job
+                    </>
+                  )}
+                </button>
+              )}
+              {job.jobUrl ? (
+                <a 
+                  href={job.jobUrl}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="px-8 py-5 rounded-2xl font-black text-sm border-2 border-slate-200 text-slate-600 hover:bg-slate-100 hover:border-slate-300 transition-all flex items-center justify-center gap-2"
+                >
+                  <i className="fa-solid fa-external-link"></i>
+                  Apply Now
+                </a>
+              ) : (
+                <button 
+                  disabled
+                  className="px-8 py-5 rounded-2xl font-black text-sm border-2 border-slate-100 text-slate-300 cursor-not-allowed"
+                >
+                  <i className="fa-solid fa-external-link mr-2"></i>
+                  Apply Now
+                </button>
+              )}
+            </>
           )}
         </div>
       </div>

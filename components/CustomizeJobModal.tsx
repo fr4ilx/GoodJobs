@@ -16,6 +16,7 @@ interface CustomizeJobModalProps {
   userGithub?: string;
   userId: string;
   onSave: (jobId: string) => void;  // moves job to Connect, caller closes modal
+  onSkipToApply?: (jobId: string) => void;  // skip Connect, move job to Apply
 }
 
 /** Wrap [placeholder?] text in yellow highlight for user to fill in */
@@ -106,6 +107,31 @@ function htmlToPlainText(html: string): string {
   return (div.textContent || div.innerText || '').toLowerCase();
 }
 
+/** Aliases: short form -> full forms that count as a match */
+const KEYWORD_ALIASES: Record<string, string[]> = {
+  go: ['go', 'golang'],
+  golang: ['go', 'golang'],
+  k8s: ['k8s', 'kubernetes'],
+  ts: ['typescript', 'ts'],
+  js: ['javascript', 'js'],
+  py: ['python', 'py'],
+  ml: ['machine learning', 'ml'],
+  ai: ['artificial intelligence', 'ai'],
+  db: ['database', 'databases', 'db'],
+};
+
+/** Check if keyword appears in text as a full word (or alias). Substring matches (e.g. "go" in "Google") do NOT count. */
+function keywordExistsAsWord(text: string, keyword: string): boolean {
+  const kw = keyword.toLowerCase().trim();
+  const escape = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  const variants = KEYWORD_ALIASES[kw] ?? [kw];
+  for (const v of variants) {
+    const re = new RegExp('\\b' + escape(v) + '\\b', 'i');
+    if (re.test(text)) return true;
+  }
+  return false;
+}
+
 const CustomizeJobModal: React.FC<CustomizeJobModalProps> = ({
   job,
   onClose,
@@ -115,7 +141,8 @@ const CustomizeJobModal: React.FC<CustomizeJobModalProps> = ({
   userEmail,
   userGithub,
   userId,
-  onSave
+  onSave,
+  onSkipToApply
 }) => {
   const mySkillsSet = new Set(mySkills.map(s => s.toLowerCase().trim()));
   const analysis = job.analysis;
@@ -134,6 +161,7 @@ const CustomizeJobModal: React.FC<CustomizeJobModalProps> = ({
   const [contentJustLoaded, setContentJustLoaded] = useState(false);
 
   // Classify keywords for right side: green (had), purple (added in tailored), blue (still missing)
+  // Use whole-word matching: "go" must appear as "Go"/"Golang", not inside "Google" or "ago"
   const keywordClassification = useCallback(() => {
     const text = htmlContent ? htmlToPlainText(htmlContent) : (tailoredContent ? htmlToPlainText(tailoredContentToHtml(tailoredContent, userGithub)) : '');
     const green: string[] = [];
@@ -141,7 +169,7 @@ const CustomizeJobModal: React.FC<CustomizeJobModalProps> = ({
     const blue: string[] = [];
     jobKeywords.forEach(k => {
       const kw = k.toLowerCase().trim();
-      const inResume = text.includes(kw);
+      const inResume = keywordExistsAsWord(text, kw);
       const hadBefore = mySkillsSet.has(kw);
       if (inResume && hadBefore) green.push(k);
       else if (inResume && !hadBefore) purple.push(k);
@@ -313,13 +341,24 @@ const CustomizeJobModal: React.FC<CustomizeJobModalProps> = ({
         className="relative w-[calc(100vw-2rem)] max-w-[calc(100vw-2rem)] h-[calc(100vh-2rem)] max-h-[calc(100vh-2rem)] bg-white rounded-[3rem] shadow-2xl flex flex-col overflow-hidden animate-in zoom-in-95 fade-in duration-300"
         onClick={(e) => e.stopPropagation()}
       >
-        <button
-          onClick={onClose}
-          className="absolute top-6 right-6 w-12 h-12 rounded-full bg-rose-500 text-white flex items-center justify-center hover:bg-rose-600 transition-all z-20 shadow-lg shadow-rose-200"
-          title="Close"
-        >
-          <i className="fa-solid fa-xmark text-xl"></i>
-        </button>
+        <div className="absolute top-6 right-6 flex items-center gap-2 z-20">
+          {onSkipToApply && (
+            <button
+              onClick={() => { onSkipToApply(job.id); onClose(); }}
+              className="px-4 py-2 rounded-xl bg-slate-100 text-slate-600 font-bold text-xs uppercase tracking-widest hover:bg-slate-200 transition-all border border-slate-200"
+              title="Skip Connect, move to Apply"
+            >
+              Skip to Apply
+            </button>
+          )}
+          <button
+            onClick={onClose}
+            className="w-12 h-12 rounded-full bg-rose-500 text-white flex items-center justify-center hover:bg-rose-600 transition-all shadow-lg shadow-rose-200"
+            title="Close"
+          >
+            <i className="fa-solid fa-xmark text-xl"></i>
+          </button>
+        </div>
 
         <div className="pt-10 pb-4 px-10 flex-shrink-0">
           <h2 className="text-2xl font-black text-slate-900 leading-tight pr-14">Let&apos;s create an ideal resume for this job.</h2>
